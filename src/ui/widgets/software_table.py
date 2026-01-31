@@ -5,6 +5,8 @@ Provides searchable, sortable table with loading states and refresh capability.
 """
 
 from typing import List, Dict, Optional
+import subprocess
+import os
 from PySide6.QtCore import Qt, Slot, Signal
 from PySide6.QtWidgets import (
     QWidget,
@@ -16,7 +18,11 @@ from PySide6.QtWidgets import (
     QPushButton,
     QLabel,
     QHeaderView,
+    QMenu,
+    QApplication,
+    QMessageBox,
 )
+from PySide6.QtGui import QAction
 
 from src.ui.theme import Colors
 from src.ui.widgets.loading_indicator import SkeletonRow, LoadingOverlay
@@ -164,6 +170,10 @@ class SoftwareTableWidget(QWidget):
             }}
         """)
 
+        # Enable context menu
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._show_context_menu)
+
         layout.addWidget(self._table)
 
         # Loading overlay (hidden by default)
@@ -308,3 +318,94 @@ class SoftwareTableWidget(QWidget):
     def _on_refresh_clicked(self) -> None:
         """Handle refresh button click."""
         self.refresh_requested.emit()
+
+    @Slot()
+    def _show_context_menu(self, pos) -> None:
+        """Show context menu for right-click."""
+        item = self._table.itemAt(pos)
+        if not item:
+            return
+
+        row = item.row()
+        if row < 0 or row >= len(self._filtered_software):
+            return
+
+        app_data = self._filtered_software[row]
+
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {Colors.WINDOW_ALT.name()};
+                color: {Colors.TEXT_PRIMARY.name()};
+                border: 1px solid {Colors.BORDER.name()};
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
+            }}
+            QMenu::item:selected {{
+                background-color: {Colors.ACCENT.name()};
+            }}
+        """)
+
+        # Copy Name
+        copy_name_action = QAction("Copy Name", self)
+        copy_name_action.triggered.connect(lambda: self._copy_to_clipboard(app_data.get("Name", "")))
+        menu.addAction(copy_name_action)
+
+        # Copy Publisher
+        copy_publisher_action = QAction("Copy Publisher", self)
+        copy_publisher_action.triggered.connect(lambda: self._copy_to_clipboard(app_data.get("Publisher", "")))
+        menu.addAction(copy_publisher_action)
+
+        menu.addSeparator()
+
+        # Open Install Location
+        install_loc = app_data.get("InstallLocation", "")
+        open_location_action = QAction("Open Install Location", self)
+        open_location_action.setEnabled(bool(install_loc) and os.path.exists(install_loc))
+        open_location_action.triggered.connect(lambda: self._open_location(install_loc))
+        menu.addAction(open_location_action)
+
+        menu.addSeparator()
+
+        # Uninstall
+        uninstall_str = app_data.get("UninstallString", "")
+        uninstall_action = QAction("Uninstall...", self)
+        uninstall_action.setEnabled(bool(uninstall_str))
+        uninstall_action.triggered.connect(lambda: self._run_uninstall(app_data.get("Name", ""), uninstall_str))
+        menu.addAction(uninstall_action)
+
+        menu.addSeparator()
+
+        # Refresh
+        refresh_action = QAction("Refresh", self)
+        refresh_action.triggered.connect(self._on_refresh_clicked)
+        menu.addAction(refresh_action)
+
+        menu.exec(self._table.viewport().mapToGlobal(pos))
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        """Copy text to clipboard."""
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)
+
+    def _open_location(self, path: str) -> None:
+        """Open folder in Explorer."""
+        if path and os.path.exists(path):
+            subprocess.Popen(['explorer', path])
+
+    def _run_uninstall(self, name: str, uninstall_str: str) -> None:
+        """Run uninstall command after confirmation."""
+        reply = QMessageBox.question(
+            self,
+            "Confirm Uninstall",
+            f"Are you sure you want to uninstall '{name}'?\n\nThis will run:\n{uninstall_str[:100]}{'...' if len(uninstall_str) > 100 else ''}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                subprocess.Popen(uninstall_str, shell=True)
+            except Exception as e:
+                QMessageBox.warning(self, "Uninstall Failed", f"Failed to start uninstall:\n{str(e)}")

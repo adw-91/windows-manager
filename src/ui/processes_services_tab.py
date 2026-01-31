@@ -4,10 +4,11 @@ from typing import List, Dict, Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
     QTableWidgetItem, QPushButton, QLineEdit, QLabel,
-    QHeaderView, QTabWidget, QCheckBox, QMessageBox
+    QHeaderView, QTabWidget, QCheckBox, QMessageBox,
+    QMenu, QApplication
 )
 from PySide6.QtCore import Qt, Slot, QThreadPool
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QAction
 
 from src.services.process_manager import get_process_manager
 from src.services.service_info import get_service_info
@@ -154,6 +155,10 @@ class ProcessesServicesTab(QWidget):
         # Connect selection change
         self._process_table.itemSelectionChanged.connect(self._on_selection_changed)
 
+        # Enable context menu
+        self._process_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._process_table.customContextMenuRequested.connect(self._show_process_context_menu)
+
         layout.addWidget(self._process_table)
 
         # Buttons
@@ -274,6 +279,11 @@ class ProcessesServicesTab(QWidget):
         """)
 
         self._service_table.itemSelectionChanged.connect(self._on_service_selection_changed)
+
+        # Enable context menu
+        self._service_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._service_table.customContextMenuRequested.connect(self._show_service_context_menu)
+
         layout.addWidget(self._service_table)
 
         # Control buttons
@@ -711,3 +721,144 @@ class ProcessesServicesTab(QWidget):
         """Refresh the data in this tab"""
         self._on_refresh_clicked()
         self._service_cache.load()
+
+    # Context menu handlers
+    @Slot()
+    def _show_process_context_menu(self, pos) -> None:
+        """Show context menu for process table right-click."""
+        item = self._process_table.itemAt(pos)
+        if not item:
+            return
+
+        row = item.row()
+        if row < 0 or row >= len(self._filtered_processes):
+            return
+
+        proc_data = self._filtered_processes[row]
+
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {Colors.WINDOW_ALT.name()};
+                color: {Colors.TEXT_PRIMARY.name()};
+                border: 1px solid {Colors.BORDER.name()};
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
+            }}
+            QMenu::item:selected {{
+                background-color: {Colors.ACCENT.name()};
+            }}
+        """)
+
+        # End Task
+        end_task_action = QAction("End Task", self)
+        end_task_action.triggered.connect(self._on_end_task_clicked)
+        menu.addAction(end_task_action)
+
+        menu.addSeparator()
+
+        # Copy PID
+        pid = str(proc_data.get("pid", ""))
+        copy_pid_action = QAction("Copy PID", self)
+        copy_pid_action.triggered.connect(lambda: self._copy_to_clipboard(pid))
+        menu.addAction(copy_pid_action)
+
+        # Copy Name
+        name = proc_data.get("name", "")
+        copy_name_action = QAction("Copy Name", self)
+        copy_name_action.triggered.connect(lambda: self._copy_to_clipboard(name))
+        menu.addAction(copy_name_action)
+
+        menu.addSeparator()
+
+        # Refresh
+        refresh_action = QAction("Refresh", self)
+        refresh_action.triggered.connect(self._on_refresh_clicked)
+        menu.addAction(refresh_action)
+
+        menu.exec(self._process_table.viewport().mapToGlobal(pos))
+
+    @Slot()
+    def _show_service_context_menu(self, pos) -> None:
+        """Show context menu for service table right-click."""
+        item = self._service_table.itemAt(pos)
+        if not item:
+            return
+
+        row = item.row()
+        if row < 0 or row >= len(self._filtered_services):
+            return
+
+        service_data = self._filtered_services[row]
+        self._current_selected_service = service_data.get("Name")
+
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {Colors.WINDOW_ALT.name()};
+                color: {Colors.TEXT_PRIMARY.name()};
+                border: 1px solid {Colors.BORDER.name()};
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
+            }}
+            QMenu::item:selected {{
+                background-color: {Colors.ACCENT.name()};
+            }}
+        """)
+
+        # Service control actions
+        status = service_data.get("Status", "")
+
+        start_action = QAction("Start", self)
+        start_action.setEnabled(status != "Running")
+        start_action.triggered.connect(self._on_start_service)
+        menu.addAction(start_action)
+
+        stop_action = QAction("Stop", self)
+        stop_action.setEnabled(status == "Running")
+        stop_action.triggered.connect(self._on_stop_service)
+        menu.addAction(stop_action)
+
+        restart_action = QAction("Restart", self)
+        restart_action.setEnabled(status == "Running")
+        restart_action.triggered.connect(self._on_restart_service)
+        menu.addAction(restart_action)
+
+        menu.addSeparator()
+
+        # Copy Name
+        copy_name_action = QAction("Copy Name", self)
+        copy_name_action.triggered.connect(
+            lambda: self._copy_to_clipboard(service_data.get("Name", ""))
+        )
+        menu.addAction(copy_name_action)
+
+        # Copy Display Name
+        copy_display_action = QAction("Copy Display Name", self)
+        copy_display_action.triggered.connect(
+            lambda: self._copy_to_clipboard(service_data.get("DisplayName", ""))
+        )
+        menu.addAction(copy_display_action)
+
+        # Copy Path
+        copy_path_action = QAction("Copy Path", self)
+        copy_path_action.triggered.connect(
+            lambda: self._copy_to_clipboard(service_data.get("PathName", ""))
+        )
+        menu.addAction(copy_path_action)
+
+        menu.addSeparator()
+
+        # Refresh
+        refresh_action = QAction("Refresh", self)
+        refresh_action.triggered.connect(self._on_refresh_services)
+        menu.addAction(refresh_action)
+
+        menu.exec(self._service_table.viewport().mapToGlobal(pos))
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        """Copy text to clipboard."""
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)

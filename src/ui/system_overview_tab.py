@@ -17,6 +17,7 @@ from src.ui.widgets.expandable_metric_tile import ExpandableMetricTile
 from src.ui.widgets.collapsible_section import CollapsibleSection
 from src.ui.widgets.software_table import SoftwareTableWidget
 from src.ui.widgets.startup_table import StartupAppsWidget
+from src.ui.widgets.battery_widget import BatteryWidget
 from src.ui.theme import Colors
 from src.services.system_monitor import SystemMonitor
 from src.services.windows_info import WindowsInfo
@@ -241,6 +242,7 @@ class SystemOverviewTab(QWidget):
         self._software_table = SoftwareTableWidget()
         self._software_table.refresh_requested.connect(self._on_software_refresh)
         self._software_section.set_content(self._software_table)
+        self._software_section.toggled.connect(self._on_software_section_toggled)
         content_layout.addWidget(self._software_section)
 
         # Startup Apps section (collapsed by default)
@@ -251,17 +253,15 @@ class SystemOverviewTab(QWidget):
         self._startup_table.add_requested.connect(self._on_startup_add)
         self._startup_table.remove_requested.connect(self._on_startup_remove)
         self._startup_section.set_content(self._startup_table)
+        self._startup_section.toggled.connect(self._on_startup_section_toggled)
         content_layout.addWidget(self._startup_section)
 
         # Battery section (conditional, collapsed by default)
+        self._battery_widget = None
         if self._system_monitor.has_battery():
             self._battery_section = CollapsibleSection("Battery", expanded=False)
-            battery_placeholder = QLabel("Battery information will appear here")
-            battery_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            battery_placeholder.setStyleSheet(
-                f"color: {Colors.TEXT_SECONDARY.name()}; font-style: italic; padding: 20px;"
-            )
-            self._battery_section.set_content(battery_placeholder)
+            self._battery_widget = BatteryWidget()
+            self._battery_section.set_content(self._battery_widget)
             content_layout.addWidget(self._battery_section)
 
         content_layout.addStretch()
@@ -317,6 +317,35 @@ class SystemOverviewTab(QWidget):
         # Reset column stretches
         for i in range(4):
             self._tiles_layout.setColumnStretch(i, 1)
+
+    def _on_software_section_toggled(self, expanded: bool) -> None:
+        """Handle software section expand/collapse."""
+        if expanded:
+            # Collapse any expanded metric tiles to give table more space
+            self._collapse_all_metric_tiles()
+            # Set a minimum height for the software table
+            self._software_table.setMinimumHeight(300)
+        else:
+            # Reset minimum height
+            self._software_table.setMinimumHeight(0)
+
+    def _on_startup_section_toggled(self, expanded: bool) -> None:
+        """Handle startup section expand/collapse."""
+        if expanded:
+            # Collapse any expanded metric tiles to give table more space
+            self._collapse_all_metric_tiles()
+            # Set a minimum height for the startup table
+            self._startup_table.setMinimumHeight(300)
+        else:
+            # Reset minimum height
+            self._startup_table.setMinimumHeight(0)
+
+    def _collapse_all_metric_tiles(self) -> None:
+        """Collapse all expanded metric tiles."""
+        all_tiles = [self._cpu_tile, self._memory_tile, self._disk_tile, self._network_tile]
+        for tile in all_tiles:
+            if tile.is_expanded:
+                tile.collapse()
 
     def _load_system_info(self) -> None:
         """Load static system information."""
@@ -656,6 +685,10 @@ class SystemOverviewTab(QWidget):
         for worker in self._workers:
             worker.stop()
         self._workers.clear()
+
+        # Clean up battery widget if present
+        if self._battery_widget:
+            self._battery_widget.cleanup()
 
     def closeEvent(self, event) -> None:
         """Clean up workers when tab is closed."""

@@ -1,8 +1,12 @@
 """Drivers Tab - Device drivers and hardware management"""
 
 from typing import List, Dict
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QLineEdit, QPushButton, QLabel, QHeaderView
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
+    QLineEdit, QPushButton, QLabel, QHeaderView, QMenu, QApplication
+)
 from PySide6.QtCore import Qt, Slot, Signal
+from PySide6.QtGui import QAction
 
 from src.ui.theme import Colors
 from src.ui.widgets.loading_indicator import LoadingOverlay
@@ -141,6 +145,10 @@ class DriversTableWidget(QWidget):
             }}
         """)
 
+        # Enable context menu
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._show_context_menu)
+
         layout.addWidget(self._table)
 
         # Loading overlay (hidden by default)
@@ -265,6 +273,76 @@ class DriversTableWidget(QWidget):
     def _on_refresh_clicked(self) -> None:
         """Handle refresh button click."""
         self.refresh_requested.emit()
+
+    @Slot()
+    def _show_context_menu(self, pos) -> None:
+        """Show context menu for right-click."""
+        item = self._table.itemAt(pos)
+        if not item:
+            return
+
+        row = item.row()
+        if row < 0 or row >= len(self._filtered_drivers):
+            return
+
+        driver_data = self._filtered_drivers[row]
+
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {Colors.WINDOW_ALT.name()};
+                color: {Colors.TEXT_PRIMARY.name()};
+                border: 1px solid {Colors.BORDER.name()};
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
+            }}
+            QMenu::item:selected {{
+                background-color: {Colors.ACCENT.name()};
+            }}
+        """)
+
+        # Copy Name
+        copy_name_action = QAction("Copy Name", self)
+        copy_name_action.triggered.connect(
+            lambda: self._copy_to_clipboard(driver_data.get("Name", ""))
+        )
+        menu.addAction(copy_name_action)
+
+        # Copy Display Name
+        copy_display_action = QAction("Copy Display Name", self)
+        copy_display_action.triggered.connect(
+            lambda: self._copy_to_clipboard(driver_data.get("DisplayName", ""))
+        )
+        menu.addAction(copy_display_action)
+
+        # Copy Path
+        copy_path_action = QAction("Copy Path", self)
+        copy_path_action.triggered.connect(
+            lambda: self._copy_to_clipboard(driver_data.get("PathName", ""))
+        )
+        menu.addAction(copy_path_action)
+
+        # Copy Description
+        copy_desc_action = QAction("Copy Description", self)
+        copy_desc_action.triggered.connect(
+            lambda: self._copy_to_clipboard(driver_data.get("Description", ""))
+        )
+        menu.addAction(copy_desc_action)
+
+        menu.addSeparator()
+
+        # Refresh
+        refresh_action = QAction("Refresh", self)
+        refresh_action.triggered.connect(self._on_refresh_clicked)
+        menu.addAction(refresh_action)
+
+        menu.exec(self._table.viewport().mapToGlobal(pos))
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        """Copy text to clipboard."""
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)
 
 
 class DriversTab(QWidget):

@@ -5,6 +5,8 @@ Provides searchable, sortable table with enable/disable, add, and remove functio
 """
 
 from typing import List, Dict, Optional
+import subprocess
+import os
 from PySide6.QtCore import Qt, Slot, Signal
 from PySide6.QtWidgets import (
     QWidget,
@@ -22,7 +24,10 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QComboBox,
+    QMenu,
+    QApplication,
 )
+from PySide6.QtGui import QAction
 
 from src.ui.theme import Colors
 from src.ui.widgets.loading_indicator import LoadingOverlay
@@ -218,6 +223,10 @@ class StartupAppsWidget(QWidget):
         self._table.setSortingEnabled(True)
         self._table.verticalHeader().setVisible(False)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
+
+        # Enable context menu
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._show_context_menu)
 
         # Column sizing - all manually resizable
         header = self._table.horizontalHeader()
@@ -450,3 +459,120 @@ class StartupAppsWidget(QWidget):
 
         if reply == QMessageBox.StandardButton.Yes:
             self.remove_requested.emit(name, location)
+
+    @Slot()
+    def _show_context_menu(self, pos) -> None:
+        """Show context menu for right-click."""
+        item = self._table.itemAt(pos)
+        if not item:
+            return
+
+        row = item.row()
+        if row < 0 or row >= len(self._filtered_startup):
+            return
+
+        app_data = self._filtered_startup[row]
+
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {Colors.WINDOW_ALT.name()};
+                color: {Colors.TEXT_PRIMARY.name()};
+                border: 1px solid {Colors.BORDER.name()};
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
+            }}
+            QMenu::item:selected {{
+                background-color: {Colors.ACCENT.name()};
+            }}
+        """)
+
+        # Enable/Disable (only for registry items)
+        is_registry = app_data.get("Type") == "Registry"
+        is_enabled = app_data.get("Enabled", "Yes") == "Yes"
+
+        if is_registry:
+            toggle_text = "Disable" if is_enabled else "Enable"
+            toggle_action = QAction(toggle_text, self)
+            toggle_action.triggered.connect(
+                lambda: self._toggle_enabled(app_data, not is_enabled)
+            )
+            menu.addAction(toggle_action)
+            menu.addSeparator()
+
+        # Copy Name
+        copy_name_action = QAction("Copy Name", self)
+        copy_name_action.triggered.connect(lambda: self._copy_to_clipboard(app_data.get("Name", "")))
+        menu.addAction(copy_name_action)
+
+        # Copy Command
+        copy_cmd_action = QAction("Copy Command", self)
+        copy_cmd_action.triggered.connect(lambda: self._copy_to_clipboard(app_data.get("Command", "")))
+        menu.addAction(copy_cmd_action)
+
+        menu.addSeparator()
+
+        # Open File Location
+        command = app_data.get("Command", "")
+        file_path = self._extract_path_from_command(command)
+        open_location_action = QAction("Open File Location", self)
+        open_location_action.setEnabled(bool(file_path) and os.path.exists(os.path.dirname(file_path)))
+        open_location_action.triggered.connect(lambda: self._open_file_location(file_path))
+        menu.addAction(open_location_action)
+
+        menu.addSeparator()
+
+        # Remove
+        remove_action = QAction("Remove", self)
+        remove_action.triggered.connect(self._on_remove_clicked)
+        menu.addAction(remove_action)
+
+        menu.addSeparator()
+
+        # Refresh
+        refresh_action = QAction("Refresh", self)
+        refresh_action.triggered.connect(self._on_refresh_clicked)
+        menu.addAction(refresh_action)
+
+        menu.exec(self._table.viewport().mapToGlobal(pos))
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        """Copy text to clipboard."""
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)
+
+    def _extract_path_from_command(self, command: str) -> str:
+        """Extract file path from command string."""
+        if not command:
+            return ""
+
+        # Handle quoted paths
+        if command.startswith('"'):
+            end_quote = command.find('"', 1)
+            if end_quote > 0:
+                return command[1:end_quote]
+
+        # Handle unquoted paths
+        parts = command.split()
+        if parts:
+            return parts[0]
+
+        return command
+
+    def _open_file_location(self, file_path: str) -> None:
+        """Open file location in Explorer."""
+        if file_path and os.path.exists(file_path):
+            subprocess.Popen(['explorer', '/select,', file_path])
+        elif file_path:
+            # Try to open parent directory
+            parent = os.path.dirname(file_path)
+            if os.path.exists(parent):
+                subprocess.Popen(['explorer', parent])
+
+    def _toggle_enabled(self, app_data: dict, new_enabled: bool) -> None:
+        """Toggle enabled state of startup item."""
+        name = app_data.get("Name", "")
+        location = app_data.get("Location", "")
+        original_name = app_data.get("_original_name", name)
+        self.enable_changed.emit(name, location, new_enabled, original_name)

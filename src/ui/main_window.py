@@ -1,10 +1,11 @@
-"""Main Window for Windows Manager"""
+"""Main Window for Windows Manager with sidebar navigation"""
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTabWidget, QStatusBar, QMenuBar, QMenu
+    QStackedWidget, QStatusBar, QPushButton, QFrame,
+    QSizePolicy, QSplitter
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QAction
 
 from .system_overview_tab import SystemOverviewTab
@@ -12,16 +13,144 @@ from .system_tab import SystemTab
 from .processes_services_tab import ProcessesServicesTab
 from .drivers_tab import DriversTab
 from .enterprise_tab import EnterpriseTab
+from .theme import Colors
+
+
+class NavButton(QPushButton):
+    """Navigation button for sidebar."""
+
+    def __init__(self, text: str, icon_char: str = "", parent=None):
+        super().__init__(parent)
+        display_text = f"{icon_char}  {text}" if icon_char else text
+        self.setText(display_text)
+        self.setCheckable(True)
+        self.setFlat(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(40)
+        self._update_style(False)
+
+    def _update_style(self, selected: bool) -> None:
+        """Update button styling based on selection state."""
+        if selected:
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {Colors.ACCENT.name()};
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 10px 16px;
+                    text-align: left;
+                    font-size: 13px;
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{
+                    background-color: {Colors.ACCENT_HOVER.name()};
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: transparent;
+                    color: {Colors.TEXT_PRIMARY.name()};
+                    border: none;
+                    border-radius: 4px;
+                    padding: 10px 16px;
+                    text-align: left;
+                    font-size: 13px;
+                }}
+                QPushButton:hover {{
+                    background-color: {Colors.WIDGET_HOVER.name()};
+                }}
+            """)
+
+    def setChecked(self, checked: bool) -> None:
+        super().setChecked(checked)
+        self._update_style(checked)
+
+
+class SidebarWidget(QFrame):
+    """Sidebar widget with navigation buttons."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setFixedWidth(180)
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Colors.WINDOW_ALT.name()};
+                border-right: 1px solid {Colors.BORDER.name()};
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 12, 8, 12)
+        layout.setSpacing(4)
+
+        # Navigation buttons with icons
+        self._buttons = []
+
+        self._overview_btn = NavButton("Overview", "📊")
+        self._overview_btn.clicked.connect(lambda: self._on_nav_clicked(0))
+        layout.addWidget(self._overview_btn)
+        self._buttons.append(self._overview_btn)
+
+        self._system_btn = NavButton("System", "💻")
+        self._system_btn.clicked.connect(lambda: self._on_nav_clicked(1))
+        layout.addWidget(self._system_btn)
+        self._buttons.append(self._system_btn)
+
+        self._processes_btn = NavButton("Processes", "⚙️")
+        self._processes_btn.clicked.connect(lambda: self._on_nav_clicked(2))
+        layout.addWidget(self._processes_btn)
+        self._buttons.append(self._processes_btn)
+
+        self._drivers_btn = NavButton("Drivers", "🔧")
+        self._drivers_btn.clicked.connect(lambda: self._on_nav_clicked(3))
+        layout.addWidget(self._drivers_btn)
+        self._buttons.append(self._drivers_btn)
+
+        self._enterprise_btn = NavButton("Enterprise", "🏢")
+        self._enterprise_btn.clicked.connect(lambda: self._on_nav_clicked(4))
+        layout.addWidget(self._enterprise_btn)
+        self._buttons.append(self._enterprise_btn)
+
+        layout.addStretch()
+
+        # Callback for navigation
+        self._nav_callback = None
+
+        # Select first by default
+        self._overview_btn.setChecked(True)
+
+    def set_nav_callback(self, callback) -> None:
+        """Set callback for navigation changes."""
+        self._nav_callback = callback
+
+    def _on_nav_clicked(self, index: int) -> None:
+        """Handle navigation button click."""
+        # Update button states
+        for i, btn in enumerate(self._buttons):
+            btn.setChecked(i == index)
+
+        # Call callback
+        if self._nav_callback:
+            self._nav_callback(index)
+
+    def set_selected(self, index: int) -> None:
+        """Set selected navigation item."""
+        for i, btn in enumerate(self._buttons):
+            btn.setChecked(i == index)
 
 
 class MainWindow(QMainWindow):
-    """Main application window"""
+    """Main application window with sidebar navigation"""
 
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Windows Manager")
-        self.setMinimumSize(700, 600)
-        self.resize(700, 700)  # Start at minimum width
+        self.setMinimumSize(900, 650)
+        self.resize(1000, 750)
 
         self.init_ui()
         self.create_menu_bar()
@@ -32,27 +161,42 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        layout = QVBoxLayout(central_widget)
-        layout.setContentsMargins(0, 8, 0, 0)  # Add top margin below menu bar
+        layout = QHBoxLayout(central_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # Create tab widget
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setDocumentMode(True)
+        # Sidebar navigation
+        self._sidebar = SidebarWidget()
+        self._sidebar.set_nav_callback(self._on_nav_changed)
+        layout.addWidget(self._sidebar)
 
-        # Add tabs
+        # Content area with stacked widget
+        self._content_stack = QStackedWidget()
+        self._content_stack.setStyleSheet(f"""
+            QStackedWidget {{
+                background-color: {Colors.WINDOW.name()};
+            }}
+        """)
+
+        # Add pages (same order as sidebar buttons)
         self.overview_tab = SystemOverviewTab()
         self.system_tab = SystemTab()
         self.processes_services_tab = ProcessesServicesTab()
         self.drivers_tab = DriversTab()
         self.enterprise_tab = EnterpriseTab()
 
-        self.tab_widget.addTab(self.overview_tab, "Overview")
-        self.tab_widget.addTab(self.system_tab, "System")
-        self.tab_widget.addTab(self.processes_services_tab, "Processes && Services")
-        self.tab_widget.addTab(self.drivers_tab, "Drivers")
-        self.tab_widget.addTab(self.enterprise_tab, "Enterprise")
+        self._content_stack.addWidget(self.overview_tab)
+        self._content_stack.addWidget(self.system_tab)
+        self._content_stack.addWidget(self.processes_services_tab)
+        self._content_stack.addWidget(self.drivers_tab)
+        self._content_stack.addWidget(self.enterprise_tab)
 
-        layout.addWidget(self.tab_widget)
+        layout.addWidget(self._content_stack)
+
+    @Slot(int)
+    def _on_nav_changed(self, index: int) -> None:
+        """Handle navigation change."""
+        self._content_stack.setCurrentIndex(index)
 
     def create_menu_bar(self):
         """Create application menu bar"""
@@ -76,6 +220,34 @@ class MainWindow(QMainWindow):
         # View menu
         view_menu = menubar.addMenu("&View")
 
+        # Navigation shortcuts
+        overview_action = QAction("&Overview", self)
+        overview_action.setShortcut("Ctrl+1")
+        overview_action.triggered.connect(lambda: self._navigate_to(0))
+        view_menu.addAction(overview_action)
+
+        system_action = QAction("&System", self)
+        system_action.setShortcut("Ctrl+2")
+        system_action.triggered.connect(lambda: self._navigate_to(1))
+        view_menu.addAction(system_action)
+
+        processes_action = QAction("&Processes", self)
+        processes_action.setShortcut("Ctrl+3")
+        processes_action.triggered.connect(lambda: self._navigate_to(2))
+        view_menu.addAction(processes_action)
+
+        drivers_action = QAction("&Drivers", self)
+        drivers_action.setShortcut("Ctrl+4")
+        drivers_action.triggered.connect(lambda: self._navigate_to(3))
+        view_menu.addAction(drivers_action)
+
+        enterprise_action = QAction("&Enterprise", self)
+        enterprise_action.setShortcut("Ctrl+5")
+        enterprise_action.triggered.connect(lambda: self._navigate_to(4))
+        view_menu.addAction(enterprise_action)
+
+        view_menu.addSeparator()
+
         always_on_top_action = QAction("Always on &Top", self)
         always_on_top_action.setCheckable(True)
         always_on_top_action.triggered.connect(self.toggle_always_on_top)
@@ -88,6 +260,11 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
 
+    def _navigate_to(self, index: int) -> None:
+        """Navigate to a specific page."""
+        self._sidebar.set_selected(index)
+        self._content_stack.setCurrentIndex(index)
+
     def create_status_bar(self):
         """Create status bar"""
         self.status_bar = QStatusBar()
@@ -95,10 +272,10 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Ready")
 
     def refresh_data(self):
-        """Refresh all data in current tab"""
-        current_tab = self.tab_widget.currentWidget()
-        if hasattr(current_tab, 'refresh'):
-            current_tab.refresh()
+        """Refresh all data in current page"""
+        current_widget = self._content_stack.currentWidget()
+        if hasattr(current_widget, 'refresh'):
+            current_widget.refresh()
         self.status_bar.showMessage("Data refreshed", 2000)
 
     def toggle_always_on_top(self, checked: bool):
@@ -115,8 +292,10 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "About Windows Manager",
-            "Windows Manager v0.1.0\n\n"
-            "A lean combined system manager for Windows\n"
+            "Windows Manager v0.2.0\n\n"
+            "A unified Windows management application\n"
+            "combining Task Manager, services.msc,\n"
+            "Device Manager, and more.\n\n"
             "Built with Python and PySide6"
         )
 
