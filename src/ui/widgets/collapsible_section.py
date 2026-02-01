@@ -53,8 +53,12 @@ class CollapsibleSection(QWidget):
 
         layout.addWidget(self.content_container)
 
-        # Set initial visibility
+        # Set initial visibility and size policy
         self.content_container.setVisible(self._expanded)
+        if self._expanded:
+            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        else:
+            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
     def set_content(self, widget: QWidget):
         """Set the content widget to display"""
@@ -73,6 +77,13 @@ class CollapsibleSection(QWidget):
         self.content_container.setVisible(self._expanded)
         self.toggle_button.setChecked(self._expanded)
         self._update_button_text()
+
+        # Update size policy based on expanded state
+        if self._expanded:
+            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        else:
+            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
         self.toggled.emit(self._expanded)
 
     def set_expanded(self, expanded: bool):

@@ -1,183 +1,518 @@
-"""System Tab - Deeper system info, drivers, hardware"""
+"""System Tab - Modern card-based system information display."""
 
+import subprocess
+import psutil
+import platform
+import socket
+from typing import Dict, List, Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QScrollArea, QFrame
+    QScrollArea, QFrame, QSizePolicy
 )
 from PySide6.QtCore import Qt, Slot, QThreadPool
 
-from src.ui.widgets.collapsible_section import CollapsibleSection
-from src.ui.widgets.info_table import InfoTable
 from src.services.windows_info import WindowsInfo
 from src.utils.thread_utils import SingleRunWorker
+from src.ui.theme import Colors
+from src.ui.widgets.flow_layout import FlowLayout
+
+
+class KeyValuePair(QWidget):
+    """A widget that displays a key-value pair as a single unit for flow layouts."""
+
+    def __init__(self, key: str, value: str, parent=None):
+        super().__init__(parent)
+        self._key = key
+        self._value = value
+        self._value_label = None
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 2, 16, 2)  # Right margin for spacing between pairs
+        layout.setSpacing(6)
+
+        # Key label
+        key_label = QLabel(f"{self._key}:")
+        key_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY.name()}; font-size: 11px;")
+        key_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(key_label)
+
+        # Value label
+        self._value_label = QLabel(str(self._value))
+        self._value_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY.name()}; font-size: 11px;")
+        self._value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self._value_label)
+
+        # Set size policy so this widget doesn't stretch excessively
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+    def set_value(self, value: str):
+        """Update the value."""
+        self._value = value
+        if self._value_label:
+            self._value_label.setText(str(value))
+
+
+class InfoCard(QFrame):
+    """A modern card widget for displaying a group of related information with flow layout."""
+
+    def __init__(self, title: str, icon: str = "", parent=None):
+        super().__init__(parent)
+        self._title = title
+        self._icon = icon
+        self._kv_widgets: Dict[str, KeyValuePair] = {}
+        self._flow_layout = None
+        self._content_widget = None
+        self._init_ui()
+
+    def _init_ui(self):
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setStyleSheet(f"""
+            InfoCard {{
+                background-color: {Colors.WIDGET.name()};
+                border: 1px solid {Colors.BORDER.name()};
+                border-radius: 8px;
+            }}
+            InfoCard:hover {{
+                border-color: {Colors.ACCENT.name()};
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(10)
+
+        # Header with icon and title
+        header = QHBoxLayout()
+        header.setSpacing(8)
+
+        if self._icon:
+            icon_label = QLabel(self._icon)
+            icon_label.setStyleSheet(f"font-size: 16px;")
+            header.addWidget(icon_label)
+
+        title_label = QLabel(self._title)
+        title_label.setStyleSheet(f"""
+            font-size: 13px;
+            font-weight: bold;
+            color: {Colors.ACCENT.name()};
+        """)
+        header.addWidget(title_label)
+        header.addStretch()
+
+        layout.addLayout(header)
+
+        # Separator line
+        separator = QFrame()
+        separator.setFixedHeight(1)
+        separator.setStyleSheet(f"background-color: {Colors.BORDER.name()};")
+        layout.addWidget(separator)
+
+        # Content widget with flow layout
+        self._content_widget = QWidget()
+        self._flow_layout = FlowLayout(self._content_widget, margin=0, h_spacing=8, v_spacing=6)
+        layout.addWidget(self._content_widget)
+
+    def set_data(self, data: Dict[str, str]):
+        """Set the card data using flow layout for natural reflow."""
+        # Clear existing widgets
+        while self._flow_layout.count():
+            item = self._flow_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+        self._kv_widgets.clear()
+
+        # Create key-value pair widgets
+        items = [(k, v) for k, v in data.items() if k != "Error"]
+
+        for key, value in items:
+            kv_widget = KeyValuePair(key, value)
+            self._kv_widgets[key] = kv_widget
+            self._flow_layout.addWidget(kv_widget)
+
+        # Force layout update
+        self._content_widget.updateGeometry()
+
+
+class StatusIndicator(QFrame):
+    """A small status indicator with icon and text."""
+
+    def __init__(self, label: str, value: str = "", status: str = "neutral", parent=None):
+        super().__init__(parent)
+        self._init_ui(label, value, status)
+
+    def _init_ui(self, label: str, value: str, status: str):
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+
+        # Status dot
+        dot = QLabel("●")
+        if status == "good":
+            dot.setStyleSheet(f"color: {Colors.SUCCESS.name()}; font-size: 10px;")
+        elif status == "warning":
+            dot.setStyleSheet(f"color: {Colors.WARNING.name()}; font-size: 10px;")
+        elif status == "error":
+            dot.setStyleSheet(f"color: {Colors.ERROR.name()}; font-size: 10px;")
+        else:
+            dot.setStyleSheet(f"color: {Colors.TEXT_SECONDARY.name()}; font-size: 10px;")
+        layout.addWidget(dot)
+
+        # Label
+        lbl = QLabel(label)
+        lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY.name()}; font-size: 11px;")
+        layout.addWidget(lbl)
+
+        layout.addStretch()
+
+        # Value
+        val = QLabel(value)
+        val.setStyleSheet(f"color: {Colors.TEXT_PRIMARY.name()}; font-size: 11px; font-weight: 500;")
+        layout.addWidget(val)
+
+        self.setStyleSheet(f"""
+            StatusIndicator {{
+                background-color: {Colors.WINDOW_ALT.name()};
+                border-radius: 4px;
+            }}
+        """)
 
 
 class SystemTab(QWidget):
-    """Tab for detailed system information"""
+    """Tab for detailed system information with modern card-based UI."""
 
     def __init__(self):
         super().__init__()
         self._windows_info = WindowsInfo()
-        self._loading_label = None
-        self._system_info_table = None
-        self._hardware_table = None
-        self._os_table = None
+        self._cards: Dict[str, InfoCard] = {}
         self._worker = None
+        self._loading_label = None
         self.init_ui()
         self._load_system_info()
 
     def init_ui(self):
-        """Initialize the user interface"""
+        """Initialize the user interface."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
-        # Header with refresh button
+        # Compact header
         header_layout = QHBoxLayout()
+        header_layout.setSpacing(12)
+
         title = QLabel("System Information")
-        title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        title.setStyleSheet(f"""
+            font-size: 18px;
+            font-weight: bold;
+            color: {Colors.TEXT_PRIMARY.name()};
+        """)
         header_layout.addWidget(title)
         header_layout.addStretch()
 
-        refresh_button = QPushButton("Refresh")
-        refresh_button.clicked.connect(self.refresh)
-        header_layout.addWidget(refresh_button)
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self.refresh)
+        refresh_btn.setStyleSheet(f"""
+            QPushButton {{
+                padding: 6px 16px;
+                border: 1px solid {Colors.BORDER.name()};
+                border-radius: 4px;
+                background: {Colors.WIDGET.name()};
+                color: {Colors.TEXT_PRIMARY.name()};
+            }}
+            QPushButton:hover {{
+                background: {Colors.WIDGET_HOVER.name()};
+            }}
+        """)
+        header_layout.addWidget(refresh_btn)
 
         layout.addLayout(header_layout)
 
-        # Scrollable content area
+        # Scrollable content
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
 
         content = QWidget()
+        content.setStyleSheet("background: transparent;")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(10)
+        content_layout.setSpacing(16)
 
-        # Loading state
+        # Loading label
         self._loading_label = QLabel("Loading system information...")
         self._loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._loading_label.setStyleSheet("color: gray; font-style: italic;")
+        self._loading_label.setStyleSheet(f"""
+            color: {Colors.TEXT_SECONDARY.name()};
+            font-style: italic;
+            padding: 40px;
+        """)
         content_layout.addWidget(self._loading_label)
 
-        # System Information section
-        self._system_section = CollapsibleSection("System Information", expanded=True)
-        self._system_info_table = InfoTable()
-        self._system_section.set_content(self._system_info_table)
-        content_layout.addWidget(self._system_section)
-        self._system_section.setVisible(False)
+        # Card container - single column layout
+        self._card_container = QWidget()
+        self._card_layout = QVBoxLayout(self._card_container)
+        self._card_layout.setSpacing(10)
+        self._card_layout.setContentsMargins(0, 0, 0, 0)
+        self._card_container.setVisible(False)
 
-        # Hardware section
-        self._hardware_section = CollapsibleSection("Hardware", expanded=True)
-        self._hardware_table = InfoTable()
-        self._hardware_section.set_content(self._hardware_table)
-        content_layout.addWidget(self._hardware_section)
-        self._hardware_section.setVisible(False)
+        # Create cards with icons - single column
+        card_configs = [
+            ("System Summary", "💻"),
+            ("Hardware", "🔧"),
+            ("Components", "🖥️"),
+            ("Software", "📦"),
+            ("Security", "🛡️"),
+            ("Network", "🌐"),
+        ]
 
-        # Operating System section
-        self._os_section = CollapsibleSection("Operating System", expanded=True)
-        self._os_table = InfoTable()
-        self._os_section.set_content(self._os_table)
-        content_layout.addWidget(self._os_section)
-        self._os_section.setVisible(False)
+        for name, icon in card_configs:
+            card = InfoCard(name, icon)
+            self._cards[name] = card
+            self._card_layout.addWidget(card)
 
+        content_layout.addWidget(self._card_container)
         content_layout.addStretch()
 
         scroll.setWidget(content)
         layout.addWidget(scroll)
 
     def _load_system_info(self):
-        """Load system information in background"""
+        """Load system information in background."""
         self._loading_label.setVisible(True)
-        self._system_section.setVisible(False)
-        self._hardware_section.setVisible(False)
-        self._os_section.setVisible(False)
+        self._card_container.setVisible(False)
 
-        # Cancel any existing worker
         if self._worker:
-            self._worker.signals.finished.disconnect()
+            try:
+                self._worker.signals.finished.disconnect()
+            except RuntimeError:
+                pass
 
-        # Create and start worker
-        self._worker = SingleRunWorker(self._windows_info.get_all_system_info)
+        self._worker = SingleRunWorker(self._collect_all_info)
         self._worker.signals.result.connect(self._on_data_loaded)
         self._worker.signals.error.connect(self._on_data_error)
-        self._worker.signals.finished.connect(self._on_load_finished)
 
         QThreadPool.globalInstance().start(self._worker)
 
+    def _collect_all_info(self) -> Dict[str, Dict[str, str]]:
+        """Collect all system information (runs in worker thread)."""
+        return {
+            "System Summary": self._get_system_summary(),
+            "Hardware": self._get_hardware_resources(),
+            "Components": self._get_components(),
+            "Software": self._get_software_environment(),
+            "Security": self._get_security_info(),
+            "Network": self._get_network_info(),
+        }
+
+    def _get_system_summary(self) -> Dict[str, str]:
+        """Get system summary information."""
+        info = {}
+        try:
+            info["Computer Name"] = socket.gethostname()
+            info["OS"] = f"{platform.system()} {platform.release()}"
+            info["Version"] = platform.version()
+            info["Manufacturer"] = self._run_wmic("computersystem", "Manufacturer")
+            info["Model"] = self._run_wmic("computersystem", "Model")
+            info["Architecture"] = platform.machine()
+            info["Processor"] = self._run_wmic("cpu", "Name")
+
+            mem = psutil.virtual_memory()
+            info["RAM"] = f"{mem.total / (1024**3):.1f} GB"
+            info["Available RAM"] = f"{mem.available / (1024**3):.1f} GB ({100-mem.percent:.0f}%)"
+
+            boot_time = psutil.boot_time()
+            from datetime import datetime
+            boot_dt = datetime.fromtimestamp(boot_time)
+            info["Boot Time"] = boot_dt.strftime("%Y-%m-%d %H:%M")
+
+            info["Domain"] = self._windows_info.get_domain_workgroup()
+            info["Time Zone"] = self._windows_info.get_timezone()
+
+        except Exception as e:
+            info["Error"] = str(e)
+        return info
+
+    def _get_hardware_resources(self) -> Dict[str, str]:
+        """Get hardware resources information."""
+        info = {}
+        try:
+            cpu_count = psutil.cpu_count(logical=False) or 0
+            cpu_logical = psutil.cpu_count(logical=True) or 0
+            info["CPU Cores"] = f"{cpu_count} physical, {cpu_logical} logical"
+
+            cpu_freq = psutil.cpu_freq()
+            if cpu_freq:
+                info["CPU Speed"] = f"{cpu_freq.current:.0f} MHz (max {cpu_freq.max:.0f})"
+
+            memory_sticks = self._windows_info._get_memory_stick_capacities()
+            if memory_sticks:
+                stick_gb = [f"{c/(1024**3):.0f}GB" for c in memory_sticks]
+                info["Memory Config"] = f"{len(memory_sticks)} stick(s): {', '.join(stick_gb)}"
+
+            info["BIOS"] = self._run_wmic("bios", "SMBIOSBIOSVersion")
+            info["Baseboard"] = f"{self._run_wmic('baseboard', 'Manufacturer')} {self._run_wmic('baseboard', 'Product')}"
+
+        except Exception as e:
+            info["Error"] = str(e)
+        return info
+
+    def _get_components(self) -> Dict[str, str]:
+        """Get components information."""
+        info = {}
+        try:
+            info["Display"] = self._run_wmic("path win32_videocontroller", "Name")
+
+            vram = self._run_wmic("path win32_videocontroller", "AdapterRAM")
+            if vram and vram.isdigit():
+                info["VRAM"] = f"{int(vram) / (1024**3):.1f} GB"
+
+            info["Sound"] = self._run_wmic("sounddev", "Name")
+
+            total_disk = sum(
+                psutil.disk_usage(p.mountpoint).total
+                for p in psutil.disk_partitions()
+                if not p.mountpoint.startswith('/snap')
+            )
+            info["Storage"] = f"{total_disk / (1024**3):.0f} GB ({len(psutil.disk_partitions())} partitions)"
+
+            info["Optical"] = self._run_wmic("cdrom", "Name") or "None"
+
+        except Exception as e:
+            info["Error"] = str(e)
+        return info
+
+    def _get_software_environment(self) -> Dict[str, str]:
+        """Get software environment information."""
+        info = {}
+        try:
+            import os
+            info["User"] = f"{os.environ.get('USERDOMAIN', '')}\\{os.environ.get('USERNAME', '')}"
+            info["Processes"] = str(len(psutil.pids()))
+
+            services = list(psutil.win_service_iter()) if hasattr(psutil, 'win_service_iter') else []
+            running = sum(1 for s in services if s.status() == 'running')
+            info["Services"] = f"{running} running / {len(services)} total"
+
+            info["Windows Dir"] = os.environ.get("WINDIR", "C:\\Windows")
+            info["PATH Entries"] = str(len(os.environ.get("PATH", "").split(";")))
+            info["Locale"] = self._windows_info.get_system_locale()
+
+        except Exception as e:
+            info["Error"] = str(e)
+        return info
+
+    def _get_security_info(self) -> Dict[str, str]:
+        """Get security information."""
+        info = {}
+        try:
+            info["Security Center"] = "Active" if self._is_service_running("wscsvc") else "Inactive"
+            info["Defender"] = "Running" if self._is_service_running("WinDefend") else "Stopped"
+            info["Firewall"] = "Running" if self._is_service_running("mpssvc") else "Stopped"
+
+            try:
+                import winreg
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System")
+                uac = winreg.QueryValueEx(key, "EnableLUA")[0]
+                info["UAC"] = "Enabled" if uac else "Disabled"
+                winreg.CloseKey(key)
+            except:
+                info["UAC"] = "Unknown"
+
+            secure_boot = self._run_powershell("Confirm-SecureBootUEFI")
+            info["Secure Boot"] = "Enabled" if "True" in secure_boot else ("Disabled" if "False" in secure_boot else "N/A")
+
+            info["Windows Update"] = "Running" if self._is_service_running("wuauserv") else "Stopped"
+
+        except Exception as e:
+            info["Error"] = str(e)
+        return info
+
+    def _get_network_info(self) -> Dict[str, str]:
+        """Get network information."""
+        info = {}
+        try:
+            addrs = psutil.net_if_addrs()
+            stats = psutil.net_if_stats()
+
+            for iface, addr_list in addrs.items():
+                if iface in stats and stats[iface].isup:
+                    for addr in addr_list:
+                        if addr.family.name == 'AF_INET' and not addr.address.startswith('127.'):
+                            info["Active Adapter"] = iface
+                            info["IPv4"] = addr.address
+                            if stats[iface].speed > 0:
+                                info["Speed"] = f"{stats[iface].speed} Mbps"
+                            break
+                    if "IPv4" in info:
+                        break
+
+            info["Hostname"] = socket.gethostname()
+            try:
+                info["FQDN"] = socket.getfqdn()
+            except:
+                pass
+
+            info["Adapters"] = str(len([s for s in stats.values() if s.isup]))
+
+        except Exception as e:
+            info["Error"] = str(e)
+        return info
+
+    def _run_wmic(self, category: str, field: str) -> str:
+        """Run a WMIC command and return the result."""
+        try:
+            cmd = f"wmic {category} get {field}"
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, shell=True)
+            if result.returncode == 0:
+                lines = [l.strip() for l in result.stdout.strip().split('\n') if l.strip()]
+                if len(lines) > 1:
+                    return lines[1]
+        except:
+            pass
+        return "Unknown"
+
+    def _run_powershell(self, command: str) -> str:
+        """Run a PowerShell command and return output."""
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", command],
+                capture_output=True, text=True, timeout=5
+            )
+            return result.stdout.strip()
+        except:
+            return ""
+
+    def _is_service_running(self, service_name: str) -> bool:
+        """Check if a Windows service is running."""
+        try:
+            service = psutil.win_service_get(service_name)
+            return service.status() == 'running'
+        except:
+            return False
+
     @Slot(object)
-    def _on_data_loaded(self, data: dict):
-        """Handle loaded system information"""
+    def _on_data_loaded(self, data: Dict[str, Dict[str, str]]):
+        """Handle loaded system information."""
         if not isinstance(data, dict):
             return
 
-        # Organize data into sections
-        system_info = {}
-        hardware_info = {}
-        os_info = {}
+        for section_name, section_data in data.items():
+            if section_name in self._cards and section_data:
+                self._cards[section_name].set_data(section_data)
 
-        # System section
-        if "System Name" in data:
-            system_info["System Name"] = data["System Name"]
-        if "Manufacturer" in data:
-            system_info["Manufacturer"] = data["Manufacturer"]
-        if "Model" in data:
-            system_info["Model"] = data["Model"]
-        if "Domain/Workgroup" in data:
-            system_info["Domain/Workgroup"] = data["Domain/Workgroup"]
-
-        # Hardware section
-        if "Processor" in data:
-            hardware_info["Processor"] = data["Processor"]
-        if "Total Memory" in data:
-            hardware_info["Total Memory"] = data["Total Memory"]
-        if "Total Disk Space" in data:
-            hardware_info["Total Disk Space"] = data["Total Disk Space"]
-        if "Connected Network" in data:
-            hardware_info["Network Adapter"] = data["Connected Network"]
-        if "BIOS Version" in data:
-            hardware_info["BIOS Version"] = data["BIOS Version"]
-
-        # OS section
-        if "OS Version" in data:
-            os_info["OS Version"] = data["OS Version"]
-        if "OS Build" in data:
-            os_info["OS Build"] = data["OS Build"]
-        if "Architecture" in data:
-            os_info["Architecture"] = data["Architecture"]
-        if "System Locale" in data:
-            os_info["System Locale"] = data["System Locale"]
-        if "Time Zone" in data:
-            os_info["Time Zone"] = data["Time Zone"]
-
-        # Update UI
-        if system_info:
-            self._system_info_table.set_data(system_info)
-            self._system_section.setVisible(True)
-
-        if hardware_info:
-            self._hardware_table.set_data(hardware_info)
-            self._hardware_section.setVisible(True)
-
-        if os_info:
-            self._os_table.set_data(os_info)
-            self._os_section.setVisible(True)
+        self._loading_label.setVisible(False)
+        self._card_container.setVisible(True)
 
     @Slot(str)
     def _on_data_error(self, error_msg: str):
-        """Handle error loading system information"""
-        self._loading_label.setText(f"Error loading system information: {error_msg}")
-        self._loading_label.setStyleSheet("color: red;")
-
-    @Slot()
-    def _on_load_finished(self):
-        """Handle load finished"""
-        # Hide loading label if sections are visible
-        if self._system_section.isVisible() or self._hardware_section.isVisible() or self._os_section.isVisible():
-            self._loading_label.setVisible(False)
+        """Handle error loading system information."""
+        self._loading_label.setText(f"Error: {error_msg}")
+        self._loading_label.setStyleSheet(f"color: {Colors.ERROR.name()};")
 
     def refresh(self):
-        """Refresh the data in this tab"""
+        """Refresh the data in this tab."""
         self._load_system_info()

@@ -258,16 +258,24 @@ class SystemOverviewTab(QWidget):
 
         # Battery section (conditional, collapsed by default)
         self._battery_widget = None
+        self._battery_section = None
         if self._system_monitor.has_battery():
             self._battery_section = CollapsibleSection("Battery", expanded=False)
             self._battery_widget = BatteryWidget()
             self._battery_section.set_content(self._battery_widget)
+            self._battery_section.toggled.connect(self._on_battery_section_toggled)
             content_layout.addWidget(self._battery_section)
 
-        content_layout.addStretch()
+        # Spacer widget that shrinks when sections expand
+        self._spacer = QWidget()
+        self._spacer.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        content_layout.addWidget(self._spacer)
 
         scroll.setWidget(content)
         main_layout.addWidget(scroll)
+
+        # Track which collapsible section is expanded
+        self._expanded_section = None
 
     def _on_tile_expanded(self, tile: ExpandableMetricTile) -> None:
         """When a tile expands, collapse others and make it span full width."""
@@ -323,22 +331,70 @@ class SystemOverviewTab(QWidget):
         if expanded:
             # Collapse any expanded metric tiles to give table more space
             self._collapse_all_metric_tiles()
-            # Set a minimum height for the software table
-            self._software_table.setMinimumHeight(300)
+            # Collapse other sections
+            self._collapse_other_sections(self._software_section)
+            # Set expanding policy for the table to fill space
+            self._software_table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+            self._software_table.setMinimumHeight(200)
+            # Hide spacer when section is expanded
+            self._spacer.hide()
+            self._expanded_section = self._software_section
         else:
-            # Reset minimum height
+            # Reset size policy
+            self._software_table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             self._software_table.setMinimumHeight(0)
+            # Show spacer when no section is expanded
+            if self._expanded_section == self._software_section:
+                self._spacer.show()
+                self._expanded_section = None
 
     def _on_startup_section_toggled(self, expanded: bool) -> None:
         """Handle startup section expand/collapse."""
         if expanded:
             # Collapse any expanded metric tiles to give table more space
             self._collapse_all_metric_tiles()
-            # Set a minimum height for the startup table
-            self._startup_table.setMinimumHeight(300)
+            # Collapse other sections
+            self._collapse_other_sections(self._startup_section)
+            # Set expanding policy for the table to fill space
+            self._startup_table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+            self._startup_table.setMinimumHeight(200)
+            # Hide spacer when section is expanded
+            self._spacer.hide()
+            self._expanded_section = self._startup_section
         else:
-            # Reset minimum height
+            # Reset size policy
+            self._startup_table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             self._startup_table.setMinimumHeight(0)
+            # Show spacer when no section is expanded
+            if self._expanded_section == self._startup_section:
+                self._spacer.show()
+                self._expanded_section = None
+
+    def _on_battery_section_toggled(self, expanded: bool) -> None:
+        """Handle battery section expand/collapse."""
+        if expanded:
+            # Collapse any expanded metric tiles to give content more space
+            self._collapse_all_metric_tiles()
+            # Collapse other sections
+            self._collapse_other_sections(self._battery_section)
+            # Hide spacer when section is expanded
+            self._spacer.hide()
+            self._expanded_section = self._battery_section
+        else:
+            # Show spacer when no section is expanded
+            if self._expanded_section == self._battery_section:
+                self._spacer.show()
+                self._expanded_section = None
+
+    def _collapse_other_sections(self, current_section: CollapsibleSection) -> None:
+        """Collapse all sections except the current one."""
+        sections = [self._software_section, self._startup_section]
+        if self._battery_section:
+            sections.append(self._battery_section)
+
+        for section in sections:
+            if section != current_section and section.is_expanded():
+                section.set_expanded(False)
 
     def _collapse_all_metric_tiles(self) -> None:
         """Collapse all expanded metric tiles."""

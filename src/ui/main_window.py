@@ -13,6 +13,7 @@ from .system_tab import SystemTab
 from .processes_services_tab import ProcessesServicesTab
 from .drivers_tab import DriversTab
 from .enterprise_tab import EnterpriseTab
+from .task_scheduler_tab import TaskSchedulerTab
 from .theme import Colors
 
 
@@ -110,8 +111,13 @@ class SidebarWidget(QFrame):
         layout.addWidget(self._drivers_btn)
         self._buttons.append(self._drivers_btn)
 
+        self._tasks_btn = NavButton("Tasks", "📅")
+        self._tasks_btn.clicked.connect(lambda: self._on_nav_clicked(4))
+        layout.addWidget(self._tasks_btn)
+        self._buttons.append(self._tasks_btn)
+
         self._enterprise_btn = NavButton("Enterprise", "🏢")
-        self._enterprise_btn.clicked.connect(lambda: self._on_nav_clicked(4))
+        self._enterprise_btn.clicked.connect(lambda: self._on_nav_clicked(5))
         layout.addWidget(self._enterprise_btn)
         self._buttons.append(self._enterprise_btn)
 
@@ -183,12 +189,14 @@ class MainWindow(QMainWindow):
         self.system_tab = SystemTab()
         self.processes_services_tab = ProcessesServicesTab()
         self.drivers_tab = DriversTab()
+        self.tasks_tab = TaskSchedulerTab()
         self.enterprise_tab = EnterpriseTab()
 
         self._content_stack.addWidget(self.overview_tab)
         self._content_stack.addWidget(self.system_tab)
         self._content_stack.addWidget(self.processes_services_tab)
         self._content_stack.addWidget(self.drivers_tab)
+        self._content_stack.addWidget(self.tasks_tab)
         self._content_stack.addWidget(self.enterprise_tab)
 
         layout.addWidget(self._content_stack)
@@ -241,9 +249,14 @@ class MainWindow(QMainWindow):
         drivers_action.triggered.connect(lambda: self._navigate_to(3))
         view_menu.addAction(drivers_action)
 
+        tasks_action = QAction("&Tasks", self)
+        tasks_action.setShortcut("Ctrl+5")
+        tasks_action.triggered.connect(lambda: self._navigate_to(4))
+        view_menu.addAction(tasks_action)
+
         enterprise_action = QAction("&Enterprise", self)
-        enterprise_action.setShortcut("Ctrl+5")
-        enterprise_action.triggered.connect(lambda: self._navigate_to(4))
+        enterprise_action.setShortcut("Ctrl+6")
+        enterprise_action.triggered.connect(lambda: self._navigate_to(5))
         view_menu.addAction(enterprise_action)
 
         view_menu.addSeparator()

@@ -1,309 +1,371 @@
-"""Enterprise Tab - Domain, workgroup, AAD information"""
+"""Enterprise Tab - Modern card-based domain, workgroup, AAD information."""
 
+from typing import Dict
 from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QScrollArea,
-    QFrame,
-    QSizePolicy,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QScrollArea, QFrame, QSizePolicy
 )
 from PySide6.QtCore import Qt, Slot, QThreadPool
-from PySide6.QtGui import QFont
 
-from src.ui.widgets.collapsible_section import CollapsibleSection
 from src.ui.theme import Colors
 from src.services.enterprise_info import EnterpriseInfo
 from src.utils.thread_utils import SingleRunWorker
+from src.ui.widgets.flow_layout import FlowLayout
 
 
-class EnterpriseInfoWidget(QWidget):
-    """Widget for displaying key-value information in a formatted layout"""
+class KeyValuePair(QWidget):
+    """A widget that displays a key-value pair as a single unit for flow layouts."""
 
-    def __init__(self, parent=None):
+    # Keys that should show RAG coloring for Yes/No values
+    RAG_KEYS = {"Administrator", "Domain Joined", "Entra ID Joined", "GPOs Applied"}
+
+    def __init__(self, key: str, value: str, parent=None):
         super().__init__(parent)
-        self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(8)
-        self._labels = {}
+        self._key = key
+        self._value = value
+        self._value_label = None
+        self._init_ui()
 
-    def set_data(self, data: dict) -> None:
-        """Set key-value data and display it"""
-        # Clear existing labels
-        for label in self._labels.values():
-            self._layout.removeWidget(label)
-            label.deleteLater()
-        self._labels.clear()
+    def _init_ui(self):
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 2, 16, 2)  # Right margin for spacing between pairs
+        layout.setSpacing(6)
 
-        # Add new labels for each key-value pair
-        for key, value in data.items():
-            row_widget = QWidget()
-            row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(12)
+        # Key label
+        key_label = QLabel(f"{self._key}:")
+        key_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY.name()}; font-size: 11px;")
+        key_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(key_label)
 
-            # Key label (left-aligned, secondary text color)
-            key_label = QLabel(f"{key}:")
-            key_label.setStyleSheet(
-                f"color: {Colors.TEXT_SECONDARY.name()}; font-weight: bold; min-width: 150px;"
-            )
-            row_layout.addWidget(key_label)
+        # Value label with conditional RAG coloring
+        self._value_label = QLabel(str(self._value))
+        style = f"color: {Colors.TEXT_PRIMARY.name()}; font-size: 11px;"
 
-            # Value label (selectable, primary text color)
-            value_label = QLabel(str(value))
-            value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            value_label.setWordWrap(True)
-            value_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY.name()};")
-            row_layout.addWidget(value_label)
+        # Apply RAG coloring for specific keys
+        if self._key in self.RAG_KEYS:
+            if self._value == "Yes":
+                style = f"color: {Colors.SUCCESS.name()}; font-size: 11px; font-weight: bold;"
+            elif self._value == "No":
+                style = f"color: {Colors.TEXT_SECONDARY.name()}; font-size: 11px;"
 
-            self._layout.addWidget(row_widget)
-            self._labels[key] = value_label
+        self._value_label.setStyleSheet(style)
+        self._value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self._value_label)
 
-    def add_loading_label(self) -> None:
-        """Show loading indicator"""
-        self._layout.addWidget(
-            QLabel("Loading...")
-        )
+        # Set size policy so this widget doesn't stretch excessively
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
-    def add_error_label(self, error_msg: str) -> None:
-        """Show error message"""
-        error_label = QLabel(f"Error: {error_msg}")
-        error_label.setStyleSheet(f"color: {Colors.ERROR.name()};")
-        self._layout.addWidget(error_label)
+    def set_value(self, value: str):
+        """Update the value."""
+        self._value = value
+        if self._value_label:
+            self._value_label.setText(str(value))
 
-    def clear(self) -> None:
-        """Clear all content"""
-        for label in self._labels.values():
-            self._layout.removeWidget(label)
-            label.deleteLater()
-        self._labels.clear()
 
-        # Remove all children
-        while self._layout.count():
-            item = self._layout.takeAt(0)
-            if item.widget():
+class EnterpriseCard(QFrame):
+    """A modern card widget for displaying enterprise information with flow layout."""
+
+    def __init__(self, title: str, icon: str = "", parent=None):
+        super().__init__(parent)
+        self._title = title
+        self._icon = icon
+        self._kv_widgets: Dict[str, KeyValuePair] = {}
+        self._flow_layout = None
+        self._content_widget = None
+        self._init_ui()
+
+    def _init_ui(self):
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setStyleSheet(f"""
+            EnterpriseCard {{
+                background-color: {Colors.WIDGET.name()};
+                border: 1px solid {Colors.BORDER.name()};
+                border-radius: 8px;
+            }}
+            EnterpriseCard:hover {{
+                border-color: {Colors.ACCENT.name()};
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        # Header with icon and title
+        header = QHBoxLayout()
+        header.setSpacing(8)
+
+        if self._icon:
+            icon_label = QLabel(self._icon)
+            icon_label.setStyleSheet(f"font-size: 18px; color: {Colors.ACCENT.name()};")
+            header.addWidget(icon_label)
+
+        title_label = QLabel(self._title)
+        title_label.setStyleSheet(f"""
+            font-size: 13px;
+            font-weight: bold;
+            color: {Colors.ACCENT.name()};
+            letter-spacing: 0.5px;
+        """)
+        header.addWidget(title_label)
+        header.addStretch()
+
+        layout.addLayout(header)
+
+        # Separator line
+        separator = QFrame()
+        separator.setFixedHeight(1)
+        separator.setStyleSheet(f"background-color: {Colors.BORDER.name()};")
+        layout.addWidget(separator)
+
+        # Content widget with flow layout
+        self._content_widget = QWidget()
+        self._flow_layout = FlowLayout(self._content_widget, margin=0, h_spacing=8, v_spacing=6)
+        layout.addWidget(self._content_widget)
+
+    def set_data(self, data: Dict[str, str]):
+        """Set the card data using flow layout for natural reflow."""
+        # Clear existing widgets
+        while self._flow_layout.count():
+            item = self._flow_layout.takeAt(0)
+            if item and item.widget():
                 item.widget().deleteLater()
+        self._kv_widgets.clear()
+
+        # Create key-value pair widgets
+        items = [(k, v) for k, v in data.items() if k != "Error"]
+
+        for key, value in items:
+            kv_widget = KeyValuePair(key, value)
+            self._kv_widgets[key] = kv_widget
+            self._flow_layout.addWidget(kv_widget)
+
+        # Force layout update
+        self._content_widget.updateGeometry()
+
+    def set_loading(self):
+        """Show loading state."""
+        while self._flow_layout.count():
+            item = self._flow_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+        self._kv_widgets.clear()
+
+        loading = QLabel("Loading...")
+        loading.setStyleSheet(f"color: {Colors.TEXT_SECONDARY.name()}; font-style: italic;")
+        self._flow_layout.addWidget(loading)
+
+    def set_error(self, msg: str):
+        """Show error state."""
+        while self._flow_layout.count():
+            item = self._flow_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+        self._kv_widgets.clear()
+
+        error = QLabel(f"Error: {msg}")
+        error.setStyleSheet(f"color: {Colors.ERROR.name()};")
+        self._flow_layout.addWidget(error)
 
 
 class EnterpriseTab(QWidget):
-    """Tab for enterprise and domain information"""
+    """Tab for enterprise and domain information with modern card-based UI."""
 
     def __init__(self):
         super().__init__()
         self._enterprise_info = EnterpriseInfo()
         self._load_worker = None
-        self._thread_pool = QThreadPool.globalInstance()
-
-        # Store section widgets
-        self._sections = {}
-        self._info_widgets = {}
-
+        self._cards: Dict[str, EnterpriseCard] = {}
+        self._loading_label = None
         self.init_ui()
         self._load_data()
 
     def init_ui(self):
-        """Initialize the user interface"""
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(10)
+        """Initialize the user interface."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
-        # === Header with Refresh button ===
+        # Compact header
         header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(10)
+        header_layout.setSpacing(12)
 
-        title_label = QLabel("Enterprise Information")
-        title_font = QFont()
-        title_font.setPointSize(14)
-        title_font.setBold(True)
-        title_label.setFont(title_font)
-        header_layout.addWidget(title_label)
-
+        title = QLabel("Enterprise")
+        title.setStyleSheet(f"""
+            font-size: 18px;
+            font-weight: bold;
+            color: {Colors.TEXT_PRIMARY.name()};
+        """)
+        header_layout.addWidget(title)
         header_layout.addStretch()
 
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(self._load_data)
+        refresh_btn.setStyleSheet(f"""
+            QPushButton {{
+                padding: 6px 16px;
+                border: 1px solid {Colors.BORDER.name()};
+                border-radius: 4px;
+                background: {Colors.WIDGET.name()};
+                color: {Colors.TEXT_PRIMARY.name()};
+            }}
+            QPushButton:hover {{
+                background: {Colors.WIDGET_HOVER.name()};
+            }}
+        """)
         header_layout.addWidget(refresh_btn)
 
-        main_layout.addLayout(header_layout)
+        layout.addLayout(header_layout)
 
-        # === Scrollable content area ===
+        # Scrollable content
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
 
         content = QWidget()
+        content.setStyleSheet("background: transparent;")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(10)
+        content_layout.setSpacing(16)
 
-        # === Domain Information Section ===
-        domain_section = CollapsibleSection("Domain Information", expanded=True)
-        domain_info = EnterpriseInfoWidget()
-        domain_section.set_content(domain_info)
-        self._sections["Domain"] = domain_section
-        self._info_widgets["Domain"] = domain_info
-        content_layout.addWidget(domain_section)
+        # Loading label
+        self._loading_label = QLabel("Loading enterprise information...")
+        self._loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._loading_label.setStyleSheet(f"""
+            color: {Colors.TEXT_SECONDARY.name()};
+            font-style: italic;
+            padding: 40px;
+        """)
+        content_layout.addWidget(self._loading_label)
 
-        # === Computer Information Section ===
-        computer_section = CollapsibleSection("Computer Information", expanded=True)
-        computer_info = EnterpriseInfoWidget()
-        computer_section.set_content(computer_info)
-        self._sections["Computer"] = computer_section
-        self._info_widgets["Computer"] = computer_info
-        content_layout.addWidget(computer_section)
+        # Card container - single column layout
+        self._card_container = QWidget()
+        self._card_layout = QVBoxLayout(self._card_container)
+        self._card_layout.setSpacing(12)
+        self._card_layout.setContentsMargins(0, 0, 0, 0)
+        self._card_container.setVisible(False)
 
-        # === Current User Section ===
-        user_section = CollapsibleSection("Current User", expanded=True)
-        user_info = EnterpriseInfoWidget()
-        user_section.set_content(user_info)
-        self._sections["Current User"] = user_section
-        self._info_widgets["Current User"] = user_info
-        content_layout.addWidget(user_section)
+        # Create cards - order: Current User / Entra ID / Domain / Group Policy
+        # Removed Network, merged Domain+Computer into Domain
+        card_configs = [
+            ("Current User", "👤"),
+            ("Entra ID", "☁️"),
+            ("Domain", "🏛️"),
+            ("Group Policy", "📜"),
+        ]
 
-        # === Network Section ===
-        network_section = CollapsibleSection("Network", expanded=False)
-        network_info = EnterpriseInfoWidget()
-        network_section.set_content(network_info)
-        self._sections["Network"] = network_section
-        self._info_widgets["Network"] = network_info
-        content_layout.addWidget(network_section)
+        for name, icon in card_configs:
+            card = EnterpriseCard(name, icon)
+            self._cards[name] = card
+            self._card_layout.addWidget(card)
 
-        # === Azure AD Section ===
-        azure_section = CollapsibleSection("Azure AD", expanded=False)
-        azure_info = EnterpriseInfoWidget()
-        azure_section.set_content(azure_info)
-        self._sections["Azure AD"] = azure_section
-        self._info_widgets["Azure AD"] = azure_info
-        content_layout.addWidget(azure_section)
-
-        # === Group Policy Section ===
-        gpo_section = CollapsibleSection("Group Policy", expanded=False)
-        gpo_info = EnterpriseInfoWidget()
-        gpo_section.set_content(gpo_info)
-        self._sections["Group Policy"] = gpo_section
-        self._info_widgets["Group Policy"] = gpo_info
-        content_layout.addWidget(gpo_section)
-
+        content_layout.addWidget(self._card_container)
         content_layout.addStretch()
 
         scroll.setWidget(content)
-        main_layout.addWidget(scroll)
+        layout.addWidget(scroll)
 
     def _load_data(self) -> None:
-        """Load all enterprise information in background"""
-        # Show loading state
-        for widget in self._info_widgets.values():
-            widget.clear()
-            widget.add_loading_label()
+        """Load all enterprise information in background."""
+        self._loading_label.setVisible(True)
+        self._card_container.setVisible(False)
 
-        # Start background worker
+        for card in self._cards.values():
+            card.set_loading()
+
         self._load_worker = SingleRunWorker(
             self._enterprise_info.get_all_enterprise_info
         )
         self._load_worker.signals.result.connect(self._on_data_loaded)
         self._load_worker.signals.error.connect(self._on_data_error)
-        self._thread_pool.start(self._load_worker)
+        QThreadPool.globalInstance().start(self._load_worker)
 
     @Slot(object)
     def _on_data_loaded(self, all_data: dict) -> None:
-        """Handle loaded enterprise information"""
+        """Handle loaded enterprise information."""
         try:
-            # Populate each section with its data
-            for section_name, info_data in all_data.items():
-                if section_name in self._info_widgets:
-                    widget = self._info_widgets[section_name]
-                    widget.clear()
+            # Map old section names to new card names and format data
+            card_data_map = {
+                "Current User": self._format_current_user(all_data.get("Current User", {})),
+                "Entra ID": self._format_entra_id(all_data.get("Azure AD", {})),
+                "Domain": self._format_domain(
+                    all_data.get("Domain", {}),
+                    all_data.get("Computer", {})
+                ),
+                "Group Policy": self._format_group_policy(all_data.get("Group Policy", {})),
+            }
 
-                    # Format the data based on section
-                    formatted_data = self._format_section_data(section_name, info_data)
-                    widget.set_data(formatted_data)
+            for card_name, formatted_data in card_data_map.items():
+                if card_name in self._cards:
+                    self._cards[card_name].set_data(formatted_data)
+
+            self._loading_label.setVisible(False)
+            self._card_container.setVisible(True)
         except Exception as e:
-            print(f"Error updating enterprise data: {e}")
             self._on_data_error(str(e))
 
     @Slot(str)
     def _on_data_error(self, error_msg: str) -> None:
-        """Handle error loading data"""
-        print(f"Error loading enterprise information: {error_msg}")
-        for widget in self._info_widgets.values():
-            widget.clear()
-            widget.add_error_label(error_msg)
+        """Handle error loading data."""
+        self._loading_label.setText(f"Error: {error_msg}")
+        self._loading_label.setStyleSheet(f"color: {Colors.ERROR.name()};")
 
-    def _format_section_data(self, section_name: str, data: dict) -> dict:
-        """Format section data for display"""
-        if section_name == "Domain":
-            return {
-                "Domain Name": data.get("domain_name", "Unknown"),
-                "Domain Controller": data.get("domain_controller", "Unknown"),
-                "Is Domain Joined": "Yes" if data.get("is_domain_joined", False) else "No",
-            }
-        elif section_name == "Computer":
-            return {
-                "Computer Name": data.get("computer_name", "Unknown"),
-                "Workgroup/Domain": data.get("workgroup", "Unknown"),
-                "Part of Domain": "Yes" if data.get("part_of_domain", False) else "No",
-            }
-        elif section_name == "Current User":
-            is_admin = data.get("is_admin", False)
-            return {
-                "Username": data.get("username", "Unknown"),
-                "Domain": data.get("user_domain", "Unknown"),
-                "Full User": data.get("full_user", "Unknown"),
-                "SID": data.get("sid", "Unknown"),
-                "Administrator": "Yes" if is_admin else "No",
-            }
-        elif section_name == "Network":
-            dns_servers = data.get("dns_servers", [])
-            dns_str = ", ".join(dns_servers) if dns_servers else "None"
-            return {
-                "Primary IP": data.get("primary_ip", "Unknown"),
-                "Adapter": data.get("adapter_name", "Unknown"),
-                "DNS Servers": dns_str,
-                "IPv6 Address": data.get("ipv6_address", "Unknown"),
-            }
-        elif section_name == "Azure AD":
-            is_aad_joined = data.get("is_azure_ad_joined", False)
-            return {
-                "Azure AD Joined": "Yes" if is_aad_joined else "No",
-                "Tenant ID": data.get("tenant_id", "Unknown"),
-                "Tenant Name": data.get("tenant_name", "Unknown"),
-                "Device ID": data.get("device_id", "Unknown"),
-                "Device Name": data.get("device_name", "Unknown"),
-            }
-        elif section_name == "Group Policy":
-            gpos_applied = data.get("gpos_applied", False)
-            gpo_count = data.get("applied_gpo_count", 0)
-            gpresult_available = data.get("gpresult_available", True)
+    def _format_current_user(self, data: dict) -> dict:
+        """Format current user data."""
+        return {
+            "Username": data.get("username", "N/A"),
+            "Domain": data.get("user_domain", "N/A"),
+            "Full Name": data.get("full_user", "N/A"),
+            "SID": data.get("sid", "N/A"),
+            "Administrator": "Yes" if data.get("is_admin", False) else "No",
+        }
 
-            result = {
-                "GPOs Applied": "Yes" if gpos_applied else "No",
-                "Applied GPO Count": str(gpo_count),
-                "Gpresult Available": "Yes" if gpresult_available else "No",
-            }
+    def _format_entra_id(self, data: dict) -> dict:
+        """Format Entra ID (Azure AD) data."""
+        return {
+            "Entra ID Joined": "Yes" if data.get("is_azure_ad_joined", False) else "No",
+            "Tenant ID": data.get("tenant_id", "N/A"),
+            "Tenant Name": data.get("tenant_name", "N/A"),
+            "Device ID": data.get("device_id", "N/A"),
+        }
 
-            # Add policy lists if available
-            computer_policies = data.get("computer_policies", [])
-            user_policies = data.get("user_policies", [])
+    def _format_domain(self, domain_data: dict, computer_data: dict) -> dict:
+        """Format merged domain and computer data."""
+        is_domain_joined = domain_data.get("is_domain_joined", False) or computer_data.get("part_of_domain", False)
+        return {
+            "Computer Name": computer_data.get("computer_name", "N/A"),
+            "Domain/Workgroup": computer_data.get("workgroup", "N/A") or domain_data.get("domain_name", "N/A"),
+            "Domain Joined": "Yes" if is_domain_joined else "No",
+            "Domain Controller": domain_data.get("domain_controller", "N/A"),
+        }
 
-            if computer_policies:
-                result["Computer Policies"] = ", ".join(computer_policies[:3])
-                if len(computer_policies) > 3:
-                    result["Computer Policies"] += f", +{len(computer_policies) - 3} more"
+    def _format_group_policy(self, data: dict) -> dict:
+        """Format group policy data."""
+        gpos = data.get("gpos_applied", False)
+        result = {
+            "GPOs Applied": "Yes" if gpos else "No",
+            "Applied Count": str(data.get("applied_gpo_count", 0)),
+        }
 
-            if user_policies:
-                result["User Policies"] = ", ".join(user_policies[:3])
-                if len(user_policies) > 3:
-                    result["User Policies"] += f", +{len(user_policies) - 3} more"
+        comp_policies = data.get("computer_policies", [])
+        user_policies = data.get("user_policies", [])
 
-            return result
+        if comp_policies:
+            display = ", ".join(comp_policies[:2])
+            if len(comp_policies) > 2:
+                display += f" (+{len(comp_policies) - 2})"
+            result["Computer GPOs"] = display
 
-        # Default: return data as-is
-        return {str(k): str(v) for k, v in data.items()}
+        if user_policies:
+            display = ", ".join(user_policies[:2])
+            if len(user_policies) > 2:
+                display += f" (+{len(user_policies) - 2})"
+            result["User GPOs"] = display
+
+        return result
 
     def refresh(self) -> None:
-        """Refresh the data in this tab"""
+        """Refresh the data in this tab."""
         self._load_data()
