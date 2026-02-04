@@ -418,3 +418,14 @@ class EnterpriseInfo:
             "Azure AD": self.get_azure_ad_info(),
             "Group Policy": self.get_group_policy_info(),
         }
+
+
+_enterprise_info: Optional[EnterpriseInfo] = None
+
+
+def get_enterprise_info() -> EnterpriseInfo:
+    """Get the global EnterpriseInfo instance."""
+    global _enterprise_info
+    if _enterprise_info is None:
+        _enterprise_info = EnterpriseInfo()
+    return _enterprise_info

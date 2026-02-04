@@ -252,6 +252,36 @@ class MainWindow(QMainWindow):
 
         self._content_stack.setCurrentIndex(index)
 
+    def prewarm_caches(self) -> None:
+        """
+        Pre-warm caches in background after window is shown.
+
+        This loads data for tabs that haven't been viewed yet,
+        so when the user switches to them, the data is already available.
+        """
+        from PySide6.QtCore import QTimer, QThreadPool
+        from src.utils.thread_utils import SingleRunWorker
+
+        def _do_prewarm():
+            # Prewarm task scheduler cache (slowest)
+            try:
+                from src.services.task_scheduler_info import get_task_scheduler_info
+                get_task_scheduler_info().get_all_tasks()
+            except Exception:
+                pass
+
+            # Prewarm enterprise info cache
+            try:
+                from src.services.enterprise_info import get_enterprise_info
+                get_enterprise_info().get_all_enterprise_info()
+            except Exception:
+                pass
+
+        # Start prewarm 500ms after window is shown
+        QTimer.singleShot(500, lambda: QThreadPool.globalInstance().start(
+            SingleRunWorker(_do_prewarm)
+        ))
+
     def create_menu_bar(self):
         """Create application menu bar"""
         menubar = self.menuBar()

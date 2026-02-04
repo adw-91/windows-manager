@@ -25,6 +25,9 @@ def main():
     window = MainWindow()
     window.show()
 
+    # Prewarm caches in background after window is displayed
+    window.prewarm_caches()
+
     sys.exit(app.exec())
 
 
