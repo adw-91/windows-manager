@@ -413,6 +413,7 @@ class TaskSchedulerTab(QWidget):
         self._filtered_tasks: List[Dict] = []
         self._current_folder: str = "\\"
         self._current_task: Optional[Dict] = None
+        self._data_loaded = False  # Track if data has been loaded
 
         # Task cache
         self._task_cache = DataCache(
@@ -422,7 +423,8 @@ class TaskSchedulerTab(QWidget):
 
         self._init_ui()
         self._setup_cache()
-        self._task_cache.load()
+        # Show loading state initially, but don't load data yet (lazy loading)
+        self._loading_overlay.show_loading("Loading tasks...")
 
     def _init_ui(self) -> None:
         """Initialize the user interface."""
@@ -976,6 +978,12 @@ class TaskSchedulerTab(QWidget):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             # Refresh to show the new task
             self._task_cache.refresh()
+
+    def on_tab_activated(self) -> None:
+        """Called when this tab becomes visible. Loads data on first activation."""
+        if not self._data_loaded:
+            self._data_loaded = True
+            self._task_cache.load()
 
     def refresh(self) -> None:
         """Refresh the data in this tab."""

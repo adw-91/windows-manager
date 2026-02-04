@@ -177,8 +177,9 @@ class EnterpriseTab(QWidget):
         self._load_worker = None
         self._cards: Dict[str, EnterpriseCard] = {}
         self._loading_label = None
+        self._data_loaded = False  # Track if data has been loaded
         self.init_ui()
-        self._load_data()
+        # Don't load data here - will be loaded on first tab activation (lazy loading)
 
     def init_ui(self):
         """Initialize the user interface."""
@@ -365,6 +366,12 @@ class EnterpriseTab(QWidget):
             result["User GPOs"] = display
 
         return result
+
+    def on_tab_activated(self) -> None:
+        """Called when this tab becomes visible. Loads data on first activation."""
+        if not self._data_loaded:
+            self._data_loaded = True
+            self._load_data()
 
     def refresh(self) -> None:
         """Refresh the data in this tab."""

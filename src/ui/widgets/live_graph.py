@@ -12,6 +12,9 @@ from PySide6.QtGui import QColor
 
 from src.ui.theme import Colors
 
+# Disable antialiasing globally for better performance
+pg.setConfigOptions(antialias=False, useOpenGL=False)
+
 
 class RingBuffer:
     """
@@ -82,7 +85,7 @@ class LiveGraph(pg.PlotWidget):
         graph.add_point(30.0, series="cpu")  # Named series
     """
 
-    RESIZE_DEBOUNCE_MS = 50  # 50ms debounce for resize events
+    RESIZE_DEBOUNCE_MS = 150  # 150ms debounce for resize events
 
     def __init__(
         self,
@@ -111,6 +114,7 @@ class LiveGraph(pg.PlotWidget):
         self._resize_timer.setInterval(self.RESIZE_DEBOUNCE_MS)
         self._resize_timer.timeout.connect(self._do_deferred_resize)
         self._pending_resize_event = None
+        self._resizing = False  # Track if resize is in progress
 
         # Configure appearance
         self._setup_style(title, y_label, show_grid)
@@ -171,7 +175,9 @@ class LiveGraph(pg.PlotWidget):
         """Create a new data series with its own buffer and plot line."""
         buffer = RingBuffer(self._max_points)
         pen = pg.mkPen(color=color.name(), width=width)
-        curve = self.plot(pen=pen)
+        # clipToView=True: only render points in visible range (performance)
+        # connect='finite': skip NaN/inf values without breaking line
+        curve = self.plot(pen=pen, clipToView=True, connect='finite')
 
         self._series[name] = (buffer, curve)
 
@@ -219,6 +225,10 @@ class LiveGraph(pg.PlotWidget):
         buffer, curve = self._series[series]
         buffer.append(value)
 
+        # Skip curve update during resize (will refresh after resize completes)
+        if self.is_resizing:
+            return
+
         # Update plot
         y_data = buffer.get_data()
         # Align x_data to match y_data length (for partially filled buffers)
@@ -240,6 +250,10 @@ class LiveGraph(pg.PlotWidget):
             if series in self._series:
                 buffer, _ = self._series[series]
                 buffer.append(value)
+
+        # Skip curve updates during resize (will refresh after resize completes)
+        if self.is_resizing:
+            return
 
         # Second pass: update all curves (single repaint batch)
         for series in points:
@@ -279,6 +293,11 @@ class LiveGraph(pg.PlotWidget):
         self._y_range = None
         self.enableAutoRange(axis='y')
 
+    @property
+    def is_resizing(self) -> bool:
+        """Check if a resize is currently in progress."""
+        return getattr(self, '_resizing', False)
+
     def resizeEvent(self, event) -> None:
         """
         Handle resize with debouncing.
@@ -291,14 +310,25 @@ class LiveGraph(pg.PlotWidget):
             super().resizeEvent(event)
             return
 
+        self._resizing = True
         self._pending_resize_event = event
         self._resize_timer.start()
 
     def _do_deferred_resize(self) -> None:
         """Execute the deferred resize after debounce delay."""
+        self._resizing = False
         if self._pending_resize_event is not None:
             super().resizeEvent(self._pending_resize_event)
             self._pending_resize_event = None
+            # Refresh all curves after resize completes
+            self._refresh_all_curves()
+
+    def _refresh_all_curves(self) -> None:
+        """Redraw all curves with current data."""
+        for buffer, curve in self._series.values():
+            y_data = buffer.get_data()
+            x_data = self._x_data[-len(y_data):]
+            curve.setData(x_data, y_data)
 
 
 class MultiLineGraph(LiveGraph):

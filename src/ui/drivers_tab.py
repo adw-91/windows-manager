@@ -352,10 +352,12 @@ class DriversTab(QWidget):
         super().__init__()
         self._driver_cache = DataCache(get_driver_info().get_all_drivers, fallback_value=[])
         self._table_widget = DriversTableWidget(self)
+        self._data_loaded = False  # Track if data has been loaded
 
         self.init_ui()
         self._connect_signals()
-        self._load_drivers()
+        # Show loading state initially, but don't load data yet (lazy loading)
+        self._table_widget.set_loading(True)
 
     def init_ui(self):
         """Initialize the user interface"""
@@ -401,6 +403,12 @@ class DriversTab(QWidget):
     def _on_refresh_requested(self) -> None:
         """Handle refresh request from table."""
         self._driver_cache.refresh()
+
+    def on_tab_activated(self) -> None:
+        """Called when this tab becomes visible. Loads data on first activation."""
+        if not self._data_loaded:
+            self._data_loaded = True
+            self._load_drivers()
 
     def refresh(self):
         """Refresh the data in this tab"""

@@ -88,6 +88,7 @@ class LoopingWorker(QThread):
         self.signals = WorkerSignals()
 
         self._running = True
+        self._paused = False
         self._mutex = QMutex()
 
     @property
@@ -96,16 +97,34 @@ class LoopingWorker(QThread):
         with QMutexLocker(self._mutex):
             return self._running
 
+    @property
+    def is_paused(self) -> bool:
+        """Thread-safe check of paused state."""
+        with QMutexLocker(self._mutex):
+            return self._paused
+
+    def pause(self) -> None:
+        """Pause the worker. It will continue sleeping but not execute the function."""
+        with QMutexLocker(self._mutex):
+            self._paused = True
+
+    def resume(self) -> None:
+        """Resume the worker."""
+        with QMutexLocker(self._mutex):
+            self._paused = False
+
     def run(self) -> None:
         """Execute the function repeatedly until stopped."""
         while self.is_running:
-            try:
-                result = self.func(*self.args, **self.kwargs)
-                if self.is_running:
-                    self.signals.result.emit(result)
-            except Exception as e:
-                if self.is_running:
-                    self.signals.error.emit(str(e))
+            # Skip execution when paused, but keep sleeping
+            if not self.is_paused:
+                try:
+                    result = self.func(*self.args, **self.kwargs)
+                    if self.is_running and not self.is_paused:
+                        self.signals.result.emit(result)
+                except Exception as e:
+                    if self.is_running and not self.is_paused:
+                        self.signals.error.emit(str(e))
 
             # Sleep in small chunks to allow responsive stopping
             elapsed = 0

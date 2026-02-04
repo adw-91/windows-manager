@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QStatusBar, QPushButton, QFrame,
     QSizePolicy, QSplitter
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, Signal
 from PySide6.QtGui import QAction
 
 from .system_overview_tab import SystemOverviewTab
@@ -152,11 +152,18 @@ class SidebarWidget(QFrame):
 class MainWindow(QMainWindow):
     """Main application window with sidebar navigation"""
 
+    # Emitted when critical content is loaded and window is ready to show
+    ready_to_show = Signal()
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Windows Manager")
         self.setMinimumSize(900, 650)
         self.resize(1000, 750)
+
+        # Track readiness state
+        self._system_info_ready = False
+        self._first_metrics_ready = False
 
         self.init_ui()
         self.create_menu_bar()
@@ -192,6 +199,10 @@ class MainWindow(QMainWindow):
         self.tasks_tab = TaskSchedulerTab()
         self.enterprise_tab = EnterpriseTab()
 
+        # Connect to overview tab readiness signals
+        self.overview_tab.system_info_ready.connect(self._on_system_info_ready)
+        self.overview_tab.first_metrics_ready.connect(self._on_first_metrics_ready)
+
         self._content_stack.addWidget(self.overview_tab)
         self._content_stack.addWidget(self.system_tab)
         self._content_stack.addWidget(self.processes_services_tab)
@@ -204,37 +215,50 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def _on_nav_changed(self, index: int) -> None:
         """Handle navigation change."""
+        # Pause/resume overview tab workers based on visibility
+        if index == 0:
+            # Overview tab is now visible
+            self.overview_tab.resume_updates()
+        else:
+            # Overview tab is now hidden
+            self.overview_tab.pause_updates()
+
+        # Lazy load tabs on first activation
+        if index == 3:  # Drivers tab
+            self.drivers_tab.on_tab_activated()
+        elif index == 4:  # Tasks tab
+            self.tasks_tab.on_tab_activated()
+        elif index == 5:  # Enterprise tab
+            self.enterprise_tab.on_tab_activated()
+
         self._content_stack.setCurrentIndex(index)
+
+    @Slot()
+    def _on_system_info_ready(self) -> None:
+        """Handle system info loaded."""
+        self._system_info_ready = True
+        self._check_ready_to_show()
+
+    @Slot()
+    def _on_first_metrics_ready(self) -> None:
+        """Handle first metrics received."""
+        self._first_metrics_ready = True
+        self._check_ready_to_show()
+
+    def _check_ready_to_show(self) -> None:
+        """Check if critical content is ready and emit signal."""
+        if self._system_info_ready and self._first_metrics_ready:
+            self.ready_to_show.emit()
 
     def prewarm_caches(self) -> None:
         """
         Pre-warm caches in background after window is shown.
 
-        This loads data for tabs that haven't been viewed yet,
-        so when the user switches to them, the data is already available.
+        Note: With lazy loading enabled for Drivers, Tasks, and Enterprise tabs,
+        we no longer prewarm those caches here. Data is loaded on first tab activation.
         """
-        from PySide6.QtCore import QTimer, QThreadPool
-        from src.utils.thread_utils import SingleRunWorker
-
-        def _do_prewarm():
-            # Prewarm task scheduler cache (slowest)
-            try:
-                from src.services.task_scheduler_info import get_task_scheduler_info
-                get_task_scheduler_info().get_all_tasks()
-            except Exception:
-                pass
-
-            # Prewarm enterprise info cache
-            try:
-                from src.services.enterprise_info import get_enterprise_info
-                get_enterprise_info().get_all_enterprise_info()
-            except Exception:
-                pass
-
-        # Start prewarm 500ms after window is shown
-        QTimer.singleShot(500, lambda: QThreadPool.globalInstance().start(
-            SingleRunWorker(_do_prewarm)
-        ))
+        # Currently no prewarming needed - tabs use lazy loading
+        pass
 
     def create_menu_bar(self):
         """Create application menu bar"""

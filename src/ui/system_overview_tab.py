@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, Signal
 
 from src.ui.widgets.expandable_metric_tile import ExpandableMetricTile
 from src.ui.widgets.collapsible_section import CollapsibleSection
@@ -98,6 +98,10 @@ class SystemOverviewTab(QWidget):
     UPDATE_INTERVAL_MS = 1000  # 1 second for tile values
     GRAPH_INTERVAL_MS = 500   # 500ms for graph updates
 
+    # Signals for startup readiness tracking
+    system_info_ready = Signal()
+    first_metrics_ready = Signal()
+
     def __init__(self) -> None:
         super().__init__()
         self._system_monitor = SystemMonitor()
@@ -106,6 +110,7 @@ class SystemOverviewTab(QWidget):
         self._perf_monitor = get_performance_monitor()
         self._workers: list[LoopingWorker] = []
         self._expanded_tile = None  # Track which tile is expanded
+        self._first_metrics_received = False  # Track if first metrics arrived
 
         # Software cache for installed applications
         self._software_cache = get_software_cache()
@@ -115,7 +120,7 @@ class SystemOverviewTab(QWidget):
         self._startup_service = get_startup_info()
 
         self._init_ui()
-        self._load_system_info()
+        self._load_system_info_async()  # Changed to async
         self._start_workers()
         self._init_software_cache()
         self._init_startup_cache()
@@ -403,8 +408,40 @@ class SystemOverviewTab(QWidget):
             if tile.is_expanded:
                 tile.collapse()
 
+    def _load_system_info_async(self) -> None:
+        """Load static system information asynchronously."""
+        from src.utils.thread_utils import SingleRunWorker
+        from PySide6.QtCore import QThreadPool
+
+        def _fetch_system_info():
+            return self._windows_info.get_all_system_info()
+
+        worker = SingleRunWorker(_fetch_system_info)
+        worker.signals.result.connect(self._on_system_info_loaded)
+        QThreadPool.globalInstance().start(worker)
+
+    @Slot(object)
+    def _on_system_info_loaded(self, system_info: dict) -> None:
+        """Handle system info loaded from worker."""
+        # Hostname as header, other info as compact details
+        hostname = system_info.get("System Name", "Unknown")
+        details = {
+            "Manufacturer": system_info.get("Manufacturer", "N/A"),
+            "OS": system_info.get("OS Version", "N/A"),
+            "Domain": system_info.get("Domain/Workgroup", "N/A"),
+            "Time Zone": system_info.get("Time Zone", "N/A"),
+        }
+        self._system_info_header.set_data(hostname, details)
+
+        # Set processor name as CPU tile subtitle
+        self._processor_name = system_info.get("Processor", "Unknown")
+        self._cpu_tile.set_subtitle(self._processor_name)
+
+        # Signal that system info is ready
+        self.system_info_ready.emit()
+
     def _load_system_info(self) -> None:
-        """Load static system information."""
+        """Load static system information (synchronous, for refresh)."""
         system_info = self._windows_info.get_all_system_info()
 
         # Hostname as header, other info as compact details
@@ -601,6 +638,11 @@ class SystemOverviewTab(QWidget):
             f"↓{data['net_down']:.0f} ↑{data['net_up']:.0f} KB/s"
         )
 
+        # Signal first metrics ready (once)
+        if not self._first_metrics_received:
+            self._first_metrics_received = True
+            self.first_metrics_ready.emit()
+
     @Slot(object)
     def _update_graphs(self, data: dict) -> None:
         """Update graph data points (runs in UI thread)."""
@@ -749,6 +791,16 @@ class SystemOverviewTab(QWidget):
     def refresh(self) -> None:
         """Manual refresh (called from menu)."""
         self._load_system_info()
+
+    def pause_updates(self) -> None:
+        """Pause all background workers (call when tab not visible)."""
+        for worker in self._workers:
+            worker.pause()
+
+    def resume_updates(self) -> None:
+        """Resume all background workers (call when tab becomes visible)."""
+        for worker in self._workers:
+            worker.resume()
 
     def cleanup(self) -> None:
         """Stop all workers - call when removing tab or closing app."""
