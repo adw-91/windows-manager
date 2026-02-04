@@ -8,12 +8,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QAction
 
+from .lazy_tab import LazyTab
 from .system_overview_tab import SystemOverviewTab
-from .system_tab import SystemTab
-from .processes_services_tab import ProcessesServicesTab
-from .drivers_tab import DriversTab
-from .enterprise_tab import EnterpriseTab
-from .task_scheduler_tab import TaskSchedulerTab
 from .theme import Colors
 
 
@@ -184,26 +180,76 @@ class MainWindow(QMainWindow):
             }}
         """)
 
-        # Add pages (same order as sidebar buttons)
-        self.overview_tab = SystemOverviewTab()
-        self.system_tab = SystemTab()
-        self.processes_services_tab = ProcessesServicesTab()
-        self.drivers_tab = DriversTab()
-        self.tasks_tab = TaskSchedulerTab()
-        self.enterprise_tab = EnterpriseTab()
+        # Create placeholder widgets for lazy tabs
+        self._tab_placeholders: list[QWidget] = []
+        for _ in range(6):
+            placeholder = QWidget()
+            self._content_stack.addWidget(placeholder)
+            self._tab_placeholders.append(placeholder)
 
-        self._content_stack.addWidget(self.overview_tab)
-        self._content_stack.addWidget(self.system_tab)
-        self._content_stack.addWidget(self.processes_services_tab)
-        self._content_stack.addWidget(self.drivers_tab)
-        self._content_stack.addWidget(self.tasks_tab)
-        self._content_stack.addWidget(self.enterprise_tab)
+        # Lazy tab factories - expensive tabs created on first access
+        self._lazy_tabs: dict[int, LazyTab] = {
+            # Overview tab created eagerly (always visible first)
+            1: LazyTab(self._create_system_tab),
+            2: LazyTab(self._create_processes_tab),
+            3: LazyTab(self._create_drivers_tab),
+            4: LazyTab(self._create_tasks_tab),
+            5: LazyTab(self._create_enterprise_tab),
+        }
+
+        # Overview tab is created eagerly since it's always shown first
+        self.overview_tab = SystemOverviewTab()
+        self._content_stack.removeWidget(self._tab_placeholders[0])
+        self._tab_placeholders[0].deleteLater()
+        self._tab_placeholders[0] = self.overview_tab
+        self._content_stack.insertWidget(0, self.overview_tab)
 
         layout.addWidget(self._content_stack)
 
+    def _create_system_tab(self) -> QWidget:
+        """Factory for System tab."""
+        from .system_tab import SystemTab
+        return SystemTab()
+
+    def _create_processes_tab(self) -> QWidget:
+        """Factory for Processes & Services tab."""
+        from .processes_services_tab import ProcessesServicesTab
+        return ProcessesServicesTab()
+
+    def _create_drivers_tab(self) -> QWidget:
+        """Factory for Drivers tab."""
+        from .drivers_tab import DriversTab
+        return DriversTab()
+
+    def _create_tasks_tab(self) -> QWidget:
+        """Factory for Task Scheduler tab."""
+        from .task_scheduler_tab import TaskSchedulerTab
+        return TaskSchedulerTab()
+
+    def _create_enterprise_tab(self) -> QWidget:
+        """Factory for Enterprise tab."""
+        from .enterprise_tab import EnterpriseTab
+        return EnterpriseTab()
+
     @Slot(int)
     def _on_nav_changed(self, index: int) -> None:
-        """Handle navigation change."""
+        """Handle navigation change, creating tab lazily if needed."""
+        if not 0 <= index < len(self._tab_placeholders):
+            return  # Invalid index, ignore
+
+        if index in self._lazy_tabs and not self._lazy_tabs[index].is_created:
+            # Create the tab widget
+            widget = self._lazy_tabs[index].get_widget()
+
+            # Replace placeholder in stack
+            old_widget = self._tab_placeholders[index]
+            stack_index = self._content_stack.indexOf(old_widget)
+            self._content_stack.removeWidget(old_widget)
+            old_widget.deleteLater()
+
+            self._content_stack.insertWidget(stack_index, widget)
+            self._tab_placeholders[index] = widget
+
         self._content_stack.setCurrentIndex(index)
 
     def create_menu_bar(self):
@@ -276,7 +322,7 @@ class MainWindow(QMainWindow):
     def _navigate_to(self, index: int) -> None:
         """Navigate to a specific page."""
         self._sidebar.set_selected(index)
-        self._content_stack.setCurrentIndex(index)
+        self._on_nav_changed(index)
 
     def create_status_bar(self):
         """Create status bar"""
@@ -317,4 +363,9 @@ class MainWindow(QMainWindow):
         # Stop overview tab workers
         if hasattr(self, 'overview_tab'):
             self.overview_tab.cleanup()
+
+        # Clean up any created lazy tabs
+        for lazy_tab in self._lazy_tabs.values():
+            lazy_tab.cleanup()
+
         event.accept()
