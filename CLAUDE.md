@@ -43,8 +43,3 @@
 - Registry enumeration can be slow (10s timeout recommended)
 - Windows-specific: Requires pywin32, will fail on non-Windows
 
-## Development Plan
-
-- Active plan: `plan/2026-01-25-plan.md`
-- Check "Next Steps" section for current task
-- Update Progress Log after completing tasks
