@@ -149,27 +149,13 @@ class ExpandableMetricTile(QFrame):
         # Expanded content container (hidden initially)
         self._expanded_container = QWidget()
         self._expanded_container.setVisible(False)
-        expanded_layout = QVBoxLayout(self._expanded_container)
-        expanded_layout.setContentsMargins(0, 8, 0, 0)
-        expanded_layout.setSpacing(8)
+        self._expanded_layout = QVBoxLayout(self._expanded_container)
+        self._expanded_layout.setContentsMargins(0, 8, 0, 0)
+        self._expanded_layout.setSpacing(8)
 
-        # Graph
-        if self._metric_type == "multi" and self._series_config:
-            self._graph = MultiLineGraph(
-                max_points=60,
-                y_range=self._y_range,
-                series_config=self._series_config,
-                show_legend=True,
-            )
-        else:
-            self._graph = LiveGraph(
-                max_points=60,
-                y_range=self._y_range,
-            )
-
-        self._graph.setMinimumHeight(130)
-        self._graph.setMaximumHeight(150)
-        expanded_layout.addWidget(self._graph)
+        # Graph placeholder - created lazily on first expand
+        self._graph: Optional[LiveGraph] = None
+        self._graph_created = False
 
         # Details grid (if labels provided)
         if self._detail_labels:
@@ -195,7 +181,7 @@ class ExpandableMetricTile(QFrame):
                 self._detail_widgets[label] = detail_widget
                 details_grid.addWidget(detail_widget, row, col)
 
-            expanded_layout.addWidget(details_frame)
+            self._expanded_layout.addWidget(details_frame)
 
         self._layout.addWidget(self._expanded_container)
         self._layout.addStretch()
@@ -218,6 +204,31 @@ class ExpandableMetricTile(QFrame):
                 border-color: {Colors.ACCENT.name()};
             }}
         """)
+
+    def _create_graph(self) -> None:
+        """Create the graph widget on first expansion."""
+        if self._graph_created:
+            return
+
+        if self._metric_type == "multi" and self._series_config:
+            self._graph = MultiLineGraph(
+                max_points=60,
+                y_range=self._y_range,
+                series_config=self._series_config,
+                show_legend=True,
+            )
+        else:
+            self._graph = LiveGraph(
+                max_points=60,
+                y_range=self._y_range,
+            )
+
+        self._graph.setMinimumHeight(130)
+        self._graph.setMaximumHeight(150)
+
+        # Insert at beginning of expanded layout (before details)
+        self._expanded_layout.insertWidget(0, self._graph)
+        self._graph_created = True
 
     def _get_fixed_height(self) -> int:
         return self.height()
@@ -247,6 +258,11 @@ class ExpandableMetricTile(QFrame):
 
         self._is_expanded = True
         self._expand_indicator.setText("▲")
+
+        # Create graph on first expansion
+        if not self._graph_created:
+            self._create_graph()
+
         self._expanded_container.setVisible(True)
         self._subtitle_label.setVisible(True)  # Show subtitle when expanded
 
@@ -290,8 +306,8 @@ class ExpandableMetricTile(QFrame):
         return self._is_expanded
 
     @property
-    def graph(self) -> LiveGraph:
-        """Access the underlying graph widget."""
+    def graph(self) -> Optional[LiveGraph]:
+        """Access the underlying graph widget (may be None if not yet created)."""
         return self._graph
 
     def set_subtitle(self, subtitle: str) -> None:
@@ -322,7 +338,8 @@ class ExpandableMetricTile(QFrame):
 
     def add_graph_point(self, value: float, series: str = "default") -> None:
         """Add a data point to the graph."""
-        self._graph.add_point(value, series)
+        if self._graph is not None:
+            self._graph.add_point(value, series)
 
     def update_progress(self, progress: float) -> None:
         """Update just the progress bar."""
