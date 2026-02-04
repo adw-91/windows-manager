@@ -225,6 +225,30 @@ class LiveGraph(pg.PlotWidget):
         x_data = self._x_data[-len(y_data):]
         curve.setData(x_data, y_data)
 
+    def add_points(self, points: dict[str, float]) -> None:
+        """
+        Add multiple data points without intermediate repaints.
+
+        More efficient than calling add_point multiple times when
+        updating several series at once.
+
+        Args:
+            points: Dict mapping series name to value
+        """
+        # First pass: update all buffers
+        for series, value in points.items():
+            if series in self._series:
+                buffer, _ = self._series[series]
+                buffer.append(value)
+
+        # Second pass: update all curves (single repaint batch)
+        for series in points:
+            if series in self._series:
+                buffer, curve = self._series[series]
+                y_data = buffer.get_data()
+                x_data = self._x_data[-len(y_data):]
+                curve.setData(x_data, y_data)
+
     def clear_data(self, series: str = None) -> None:
         """
         Clear data from series.

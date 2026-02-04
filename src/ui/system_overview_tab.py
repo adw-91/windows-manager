@@ -604,14 +604,28 @@ class SystemOverviewTab(QWidget):
     @Slot(object)
     def _update_graphs(self, data: dict) -> None:
         """Update graph data points (runs in UI thread)."""
-        self._cpu_tile.add_graph_point(data['cpu_user'], "User")
-        self._cpu_tile.add_graph_point(data['cpu_system'], "System")
-        self._cpu_tile.add_graph_point(data['cpu_idle'], "Idle")
-        self._memory_tile.add_graph_point(data['mem_percent'])
-        self._disk_tile.add_graph_point(data['disk_read'], "Read")
-        self._disk_tile.add_graph_point(data['disk_write'], "Write")
-        self._network_tile.add_graph_point(data['net_down'], "Down")
-        self._network_tile.add_graph_point(data['net_up'], "Up")
+        # Use batch updates for efficiency
+        if self._cpu_tile._graph is not None:
+            self._cpu_tile._graph.add_points({
+                "User": data['cpu_user'],
+                "System": data['cpu_system'],
+                "Idle": data['cpu_idle'],
+            })
+
+        if self._memory_tile._graph is not None:
+            self._memory_tile.add_graph_point(data['mem_percent'])
+
+        if self._disk_tile._graph is not None:
+            self._disk_tile._graph.add_points({
+                "Read": data['disk_read'],
+                "Write": data['disk_write'],
+            })
+
+        if self._network_tile._graph is not None:
+            self._network_tile._graph.add_points({
+                "Down": data['net_down'],
+                "Up": data['net_up'],
+            })
 
     @Slot(object)
     def _update_details(self, data: dict) -> None:
