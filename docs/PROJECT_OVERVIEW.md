@@ -1,4 +1,22 @@
-# Windows Manager Implementation
+# Windows Manager - Project Overview
+
+> High-level project documentation and progress tracker for Windows Manager
+
+---
+
+## Progress Tracker
+
+| Phase | Status | Plan Document |
+|-------|--------|---------------|
+| Phase 1: Core Foundation | **Completed** | - |
+| Phase 2: System Information | **Completed** | - |
+| Phase 3: Process & Service Management | **Completed** | - |
+| Phase 4: Enterprise Features | **Completed** | - |
+| Phase 5: Task Scheduler | **Completed** | - |
+| Phase 6: UI Polish | **Completed** | - |
+| Phase 7: Performance Optimisation | **Completed** | [2026-02-04-performance-optimisation.md](plans/2026-02-04-performance-optimisation.md) |
+
+---
 
 ## Overview
 
@@ -105,7 +123,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - `FlowLayout`: Custom layout for natural key-value pair reflow
 - `BatteryWidget`: Battery status display with health info
 - `LoadingOverlay`: Loading indicator overlay
-- `LiveGraph`: Real-time graph widget
+- `LiveGraph`: Real-time graph widget using pyqtgraph
 
 ### Utilities
 - `formatters.py`: Data formatting (bytes, uptime, percentages)
@@ -116,6 +134,8 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - PySide6 (Qt for Python)
 - psutil (System monitoring)
 - pywin32 (Windows-specific operations)
+- pyqtgraph (Real-time graphs with numpy backend)
+- numpy (Efficient data storage via ring buffers)
 - subprocess (WMIC, PowerShell, schtasks commands)
 - ctypes (Windows API for key state detection)
 
@@ -140,3 +160,44 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - Wraps to new rows when horizontal space exhausted
 - Each key-value pair is a self-contained widget unit
 - Implements `heightForWidth()` for proper container sizing
+
+---
+
+## Performance Optimisations (Implemented)
+
+The following optimisations have been implemented to improve UI responsiveness:
+
+### Cache Pre-warming
+- Background cache loading starts 500ms after window is shown
+- Task Scheduler and Enterprise info caches are pre-loaded
+- **Impact:** Tabs load faster when first accessed (data already available)
+
+### Deferred Graph Creation
+- pyqtgraph widgets are created on first tile expansion (not at startup)
+- Avoids OpenGL context setup until graphs are actually needed
+- **Impact:** Tile clicks are responsive; graph creation cost paid once
+
+### Resize Debouncing
+- Graph resize events are debounced with 50ms delay
+- Prevents per-pixel redraws during window drag operations
+- **Impact:** Smooth window resizing without lag
+
+### Batch Graph Updates
+- Multiple series updated in single repaint batch via `add_points()` method
+- Reduces repaint count from N (number of series) to 1 per update cycle
+- **Impact:** More efficient graph rendering for CPU, Disk, Network tiles
+
+### Compilation Options
+
+For significantly improved startup time, consider compiling with Nuitka:
+
+```bash
+pip install nuitka
+nuitka --standalone --enable-plugin=pyside6 --windows-console-mode=disable run_app.py
+```
+
+**Expected improvement**: 2-4x faster startup, 10-20% faster runtime.
+
+### Realistic Expectations
+
+Python/Qt will never match native Rust/C++ responsiveness for this type of application. The optimisations above can improve perceived performance from "sluggish" to "acceptable", but not to "snappy". For maximum responsiveness, consider the parallel Rust implementation (`windows-manager-rust`).
