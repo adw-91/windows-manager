@@ -7,7 +7,7 @@ Provides efficient scrolling graphs using pyqtgraph with ring buffer storage.
 from typing import Optional
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 
 from src.ui.theme import Colors
@@ -74,12 +74,15 @@ class LiveGraph(pg.PlotWidget):
     - Configurable Y-axis range (fixed or auto-scaling)
     - Dark theme styling
     - Multiple series support
+    - Resize debouncing for smoother window resizing
 
     Usage:
         graph = LiveGraph(max_points=60, y_range=(0, 100))
         graph.add_point(42.5)  # Add to default series
         graph.add_point(30.0, series="cpu")  # Named series
     """
+
+    RESIZE_DEBOUNCE_MS = 50  # 50ms debounce for resize events
 
     def __init__(
         self,
@@ -101,6 +104,13 @@ class LiveGraph(pg.PlotWidget):
 
         # X-axis values (shared across all series)
         self._x_data = np.arange(max_points)
+
+        # Resize debouncing
+        self._resize_timer = QTimer()
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(self.RESIZE_DEBOUNCE_MS)
+        self._resize_timer.timeout.connect(self._do_deferred_resize)
+        self._pending_resize_event = None
 
         # Configure appearance
         self._setup_style(title, y_label, show_grid)
@@ -244,6 +254,27 @@ class LiveGraph(pg.PlotWidget):
         self._auto_scale = True
         self._y_range = None
         self.enableAutoRange(axis='y')
+
+    def resizeEvent(self, event) -> None:
+        """
+        Handle resize with debouncing.
+
+        Instead of redrawing on every resize event during window drag,
+        we defer the actual resize to reduce CPU usage.
+        """
+        # During parent __init__, timer may not exist yet
+        if not hasattr(self, '_resize_timer'):
+            super().resizeEvent(event)
+            return
+
+        self._pending_resize_event = event
+        self._resize_timer.start()
+
+    def _do_deferred_resize(self) -> None:
+        """Execute the deferred resize after debounce delay."""
+        if self._pending_resize_event is not None:
+            super().resizeEvent(self._pending_resize_event)
+            self._pending_resize_event = None
 
 
 class MultiLineGraph(LiveGraph):
