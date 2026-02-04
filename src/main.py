@@ -2,10 +2,11 @@
 
 import sys
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPalette, QColor
 
 from src.ui.main_window import MainWindow
-from src.ui.theme import apply_dark_theme
+from src.ui.theme import apply_dark_theme, Colors
 
 
 def main():
@@ -19,37 +20,23 @@ def main():
     app.setApplicationName("Windows Manager")
     app.setOrganizationName("Windows Manager")
 
-    # Apply dark theme
+    # Apply dark theme BEFORE creating window
     apply_dark_theme(app)
+
+    # Set application-wide dark background to prevent white flash
+    palette = app.palette()
+    dark_color = QColor(Colors.WINDOW.name())
+    palette.setColor(QPalette.ColorRole.Window, dark_color)
+    palette.setColor(QPalette.ColorRole.Base, dark_color)
+    app.setPalette(palette)
 
     window = MainWindow()
 
-    # Prevent window from showing until ready
-    # WA_DontShowOnScreen prevents the window from appearing on screen
-    # even if show() is called, until we remove the attribute
-    window.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    # Ensure window background is dark before showing
+    window.setAutoFillBackground(True)
 
-    # Track if window has been shown
-    shown = False
-
-    def show_window():
-        nonlocal shown
-        if not shown:
-            shown = True
-            # Process pending events to ensure UI is fully rendered
-            app.processEvents()
-            # Remove the attribute that prevents showing
-            window.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
-            window.show()
-            # Activate and raise to bring to front
-            window.activateWindow()
-            window.raise_()
-
-    # Show window when ready (critical content loaded)
-    window.ready_to_show.connect(show_window)
-
-    # Timeout fallback - show after 5s even if not fully ready
-    QTimer.singleShot(5000, show_window)
+    # Show window immediately - dark theme prevents white flash
+    window.show()
 
     sys.exit(app.exec())
 
