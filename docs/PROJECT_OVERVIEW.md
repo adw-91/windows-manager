@@ -14,7 +14,7 @@
 | Phase 4: Enterprise Features | **Completed** | - |
 | Phase 5: Task Scheduler | **Completed** | - |
 | Phase 6: UI Polish | **Completed** | - |
-| Phase 7: Performance Optimisation | **Completed** | [2026-02-04-performance-optimisation.md](plans/2026-02-04-performance-optimisation.md) |
+| Phase 7: Performance Optimisation | **Completed** | - |
 
 ---
 
