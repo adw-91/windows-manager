@@ -5,12 +5,16 @@ Shows battery percentage, charging status, time remaining, power plan,
 and detailed battery health information similar to powercfg /batteryreport.
 """
 
+import logging
+import winreg
+
 import psutil
-import subprocess
-import os
-import tempfile
-import xml.etree.ElementTree as ET
 from typing import Optional, Dict
+
+from src.utils.win32.registry import read_string
+from src.utils.win32.wmi import WmiConnection
+
+logger = logging.getLogger(__name__)
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -230,21 +234,29 @@ class BatteryWidget(QWidget):
         except Exception:
             pass
 
-        # Get power plan
+        # Get power plan from registry
         try:
-            proc = subprocess.run(
-                ['powercfg', '/getactivescheme'],
-                capture_output=True,
-                text=True,
-                timeout=5
+            guid = read_string(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes",
+                "ActivePowerScheme",
             )
-            if proc.returncode == 0:
-                output = proc.stdout.strip()
-                # Parse output like: "Power Scheme GUID: xxx  (Balanced)"
-                if '(' in output and ')' in output:
-                    start = output.rfind('(') + 1
-                    end = output.rfind(')')
-                    result["power_plan"] = output[start:end]
+            if guid:
+                name = read_string(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    rf"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\{guid}",
+                    "FriendlyName",
+                )
+                if name and not name.startswith("@"):
+                    result["power_plan"] = name
+                else:
+                    # Map well-known GUIDs
+                    known_plans = {
+                        "381b4222-f694-41f0-9685-ff5bb260df2e": "Balanced",
+                        "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c": "High performance",
+                        "a1841308-3541-4fab-bc81-f71556f20b4a": "Power saver",
+                    }
+                    result["power_plan"] = known_plans.get(guid.lower(), guid)
         except Exception:
             pass
 
@@ -326,7 +338,7 @@ class BatteryWidget(QWidget):
         QThreadPool.globalInstance().start(worker)
 
     def _collect_detailed_info(self) -> Dict:
-        """Collect detailed battery information (runs in worker thread)."""
+        """Collect detailed battery information via WMI COM (runs in worker thread)."""
         result = {
             "manufacturer": "Unknown",
             "chemistry": "Unknown",
@@ -339,158 +351,95 @@ class BatteryWidget(QWidget):
         }
 
         try:
-            # Use PowerShell to get battery info more reliably
-            # Get Win32_Battery info
-            battery_ps = self._run_powershell(
-                "Get-CimInstance -ClassName Win32_Battery | "
-                "Select-Object -Property Name,DeviceID,EstimatedChargeRemaining,"
-                "DesignCapacity,DesignVoltage,Chemistry | ConvertTo-Json"
+            # Win32_Battery from root\cimv2
+            cimv2 = WmiConnection()
+            battery = cimv2.query_single(
+                "SELECT Name, DeviceID, DesignCapacity, DesignVoltage, Chemistry "
+                "FROM Win32_Battery"
             )
-            if battery_ps:
-                import json
-                try:
-                    battery_data = json.loads(battery_ps)
-                    if isinstance(battery_data, list):
-                        battery_data = battery_data[0] if battery_data else {}
+            if battery:
+                if battery.get("DesignCapacity"):
+                    result["design_capacity"] = f"{battery['DesignCapacity']} mWh"
+                if battery.get("DesignVoltage"):
+                    result["voltage"] = f"{battery['DesignVoltage'] / 1000:.2f} V"
 
-                    if battery_data.get('DesignCapacity'):
-                        result["design_capacity"] = f"{battery_data['DesignCapacity']} mWh"
-                    if battery_data.get('DesignVoltage'):
-                        result["voltage"] = f"{battery_data['DesignVoltage'] / 1000:.2f} V"
+                chem_map = {
+                    1: "Other", 2: "Unknown", 3: "Lead Acid",
+                    4: "Nickel Cadmium", 5: "Nickel Metal Hydride",
+                    6: "Lithium-ion", 7: "Zinc Air", 8: "Lithium Polymer",
+                }
+                if battery.get("Chemistry"):
+                    result["chemistry"] = chem_map.get(battery["Chemistry"], "Unknown")
 
-                    # Chemistry type
-                    chem_map = {
-                        1: "Other", 2: "Unknown", 3: "Lead Acid",
-                        4: "Nickel Cadmium", 5: "Nickel Metal Hydride",
-                        6: "Lithium-ion", 7: "Zinc Air", 8: "Lithium Polymer",
-                    }
-                    if battery_data.get('Chemistry'):
-                        result["chemistry"] = chem_map.get(battery_data['Chemistry'], "Unknown")
-                except json.JSONDecodeError:
-                    pass
+                if battery.get("Name") and result["manufacturer"] == "Unknown":
+                    result["manufacturer"] = battery["Name"]
 
-            # Try to get more detailed info from WMI root\WMI namespace
-            static_ps = self._run_powershell(
-                "Get-CimInstance -Namespace root/WMI -ClassName BatteryStaticData | "
-                "Select-Object -Property DesignedCapacity,ManufactureName,SerialNumber,UniqueID | ConvertTo-Json"
-            )
-            if static_ps:
-                import json
-                try:
-                    static_data = json.loads(static_ps)
-                    if isinstance(static_data, list):
-                        static_data = static_data[0] if static_data else {}
+            # root\WMI namespace for detailed battery data
+            try:
+                wmi_ns = WmiConnection(r"root\WMI")
 
-                    if static_data.get('DesignedCapacity'):
-                        result["design_capacity"] = f"{static_data['DesignedCapacity']} mWh"
-                    if static_data.get('ManufactureName'):
-                        # ManufactureName comes as array of char codes
-                        mfr = static_data['ManufactureName']
-                        if isinstance(mfr, list):
-                            mfr = ''.join(chr(c) for c in mfr if c > 0)
-                        if mfr and mfr.strip():
-                            result["manufacturer"] = mfr.strip()
-                except json.JSONDecodeError:
-                    pass
-
-            # Get full charge capacity
-            full_ps = self._run_powershell(
-                "Get-CimInstance -Namespace root/WMI -ClassName BatteryFullChargedCapacity | "
-                "Select-Object -Property FullChargedCapacity | ConvertTo-Json"
-            )
-            if full_ps:
-                import json
-                try:
-                    full_data = json.loads(full_ps)
-                    if isinstance(full_data, list):
-                        full_data = full_data[0] if full_data else {}
-
-                    if full_data.get('FullChargedCapacity'):
-                        full_cap = full_data['FullChargedCapacity']
-                        result["full_charge_capacity"] = f"{full_cap} mWh"
-
-                        # Calculate health if we have design capacity
-                        if result["design_capacity"] != "Unknown":
-                            try:
-                                design_val = int(result["design_capacity"].replace(" mWh", ""))
-                                if design_val > 0:
-                                    health = (full_cap / design_val) * 100
-                                    health = min(health, 100)  # Cap at 100%
-                                    result["health"] = f"{health:.1f}%"
-                                    result["wear_level"] = f"{max(0, 100 - health):.1f}%"
-
-                                    if health < 50:
-                                        result["health_color"] = Colors.ERROR
-                                    elif health < 80:
-                                        result["health_color"] = Colors.WARNING
-                                    else:
-                                        result["health_color"] = Colors.SUCCESS
-                            except ValueError:
-                                pass
-                except json.JSONDecodeError:
-                    pass
-
-            # Get cycle count
-            cycle_ps = self._run_powershell(
-                "Get-CimInstance -Namespace root/WMI -ClassName BatteryCycleCount | "
-                "Select-Object -Property CycleCount | ConvertTo-Json"
-            )
-            if cycle_ps:
-                import json
-                try:
-                    cycle_data = json.loads(cycle_ps)
-                    if isinstance(cycle_data, list):
-                        cycle_data = cycle_data[0] if cycle_data else {}
-
-                    if cycle_data.get('CycleCount'):
-                        result["cycle_count"] = str(cycle_data['CycleCount'])
-                except json.JSONDecodeError:
-                    pass
-
-            # Get current voltage from BatteryStatus
-            status_ps = self._run_powershell(
-                "Get-CimInstance -Namespace root/WMI -ClassName BatteryStatus | "
-                "Select-Object -Property Voltage | ConvertTo-Json"
-            )
-            if status_ps:
-                import json
-                try:
-                    status_data = json.loads(status_ps)
-                    if isinstance(status_data, list):
-                        status_data = status_data[0] if status_data else {}
-
-                    if status_data.get('Voltage') and status_data['Voltage'] > 0:
-                        result["voltage"] = f"{status_data['Voltage'] / 1000:.2f} V"
-                except json.JSONDecodeError:
-                    pass
-
-            # Fallback: try to get manufacturer from device name
-            if result["manufacturer"] == "Unknown":
-                name_ps = self._run_powershell(
-                    "(Get-CimInstance -ClassName Win32_Battery).Name"
+                # BatteryStaticData
+                static = wmi_ns.query_single(
+                    "SELECT DesignedCapacity, ManufactureName FROM BatteryStaticData"
                 )
-                if name_ps and name_ps.strip():
-                    result["manufacturer"] = name_ps.strip()
+                if static:
+                    if static.get("DesignedCapacity"):
+                        result["design_capacity"] = f"{static['DesignedCapacity']} mWh"
+                    mfr = static.get("ManufactureName")
+                    if mfr:
+                        if isinstance(mfr, (list, tuple)):
+                            mfr = "".join(chr(c) for c in mfr if c > 0)
+                        if isinstance(mfr, str) and mfr.strip():
+                            result["manufacturer"] = mfr.strip()
+
+                # BatteryFullChargedCapacity
+                full = wmi_ns.query_single(
+                    "SELECT FullChargedCapacity FROM BatteryFullChargedCapacity"
+                )
+                if full and full.get("FullChargedCapacity"):
+                    full_cap = full["FullChargedCapacity"]
+                    result["full_charge_capacity"] = f"{full_cap} mWh"
+
+                    # Calculate health
+                    if result["design_capacity"] != "Unknown":
+                        try:
+                            design_val = int(result["design_capacity"].replace(" mWh", ""))
+                            if design_val > 0:
+                                health = (full_cap / design_val) * 100
+                                health = min(health, 100)
+                                result["health"] = f"{health:.1f}%"
+                                result["wear_level"] = f"{max(0, 100 - health):.1f}%"
+
+                                if health < 50:
+                                    result["health_color"] = Colors.ERROR
+                                elif health < 80:
+                                    result["health_color"] = Colors.WARNING
+                                else:
+                                    result["health_color"] = Colors.SUCCESS
+                        except ValueError:
+                            pass
+
+                # BatteryCycleCount
+                cycle = wmi_ns.query_single(
+                    "SELECT CycleCount FROM BatteryCycleCount"
+                )
+                if cycle and cycle.get("CycleCount"):
+                    result["cycle_count"] = str(cycle["CycleCount"])
+
+                # BatteryStatus for current voltage
+                status = wmi_ns.query_single(
+                    "SELECT Voltage FROM BatteryStatus"
+                )
+                if status and status.get("Voltage") and status["Voltage"] > 0:
+                    result["voltage"] = f"{status['Voltage'] / 1000:.2f} V"
+
+            except Exception as e:
+                logger.debug("root\\WMI battery query failed: %s", e)
 
         except Exception as e:
             result["error"] = str(e)
 
         return result
-
-    def _run_powershell(self, command: str) -> str:
-        """Run a PowerShell command and return output."""
-        try:
-            result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", command],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                encoding='utf-8',
-                errors='replace'
-            )
-            return result.stdout.strip()
-        except:
-            return ""
 
     @Slot(object)
     def _update_detailed_display(self, data: Dict) -> None:
