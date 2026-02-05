@@ -1,415 +1,207 @@
-"""Enterprise and Domain Information Service - Fetches Windows domain and enterprise information"""
+"""Enterprise and Domain Information Service - via native Win32 APIs."""
 
-import subprocess
-import socket
+import logging
 import os
+import socket
+import winreg
 from typing import Any, Dict, Optional, List
+
+import psutil
+import win32api
+import win32net
+
+from src.utils.win32.security import get_current_user_sid, is_user_admin, get_current_username, get_current_domain
+from src.utils.win32.gpo import get_applied_gpos
+from src.utils.win32.registry import read_string, enumerate_subkeys
+
+logger = logging.getLogger(__name__)
 
 
 class EnterpriseInfo:
-    """Retrieve Windows enterprise, domain, and network information"""
+    """Retrieve Windows enterprise, domain, and network information via native APIs."""
 
     def __init__(self):
-        self._cache = {}
+        self._cache: Dict[str, Any] = {}
 
     def get_domain_info(self) -> Dict[str, str]:
-        """
-        Get domain information using Win32_ComputerSystem WMI class.
-
-        Returns:
-            Dictionary with keys:
-                - domain_name: Name of the domain
-                - domain_controller: Primary domain controller
-                - is_domain_joined: True if computer is domain-joined
-        """
+        """Get domain information via NetGetJoinInformation."""
         result = {
             "domain_name": "Unknown",
             "domain_controller": "Unknown",
-            "is_domain_joined": False
+            "is_domain_joined": False,
         }
 
         try:
-            # Query Win32_ComputerSystem for domain info
-            wmic_result = subprocess.run(
-                ['wmic', 'computersystem', 'get', 'domain,partofdomainbynet'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-
-            if wmic_result.returncode == 0:
-                lines = [line.strip() for line in wmic_result.stdout.strip().split('\n') if line.strip()]
-                if len(lines) > 1:
-                    # Parse domain information
-                    parts = lines[1].split()
-                    if len(parts) >= 1:
-                        domain = parts[0]
-                        if domain and domain.upper() != 'WORKGROUP':
-                            result["domain_name"] = domain
-                            result["is_domain_joined"] = True
-                            # Try to get domain controller
-                            result["domain_controller"] = self._get_domain_controller()
-        except Exception:
-            pass
+            name, join_status = win32net.NetGetJoinInformation(None)
+            # join_status: 0=Unknown, 1=Unjoined, 2=Workgroup, 3=Domain
+            if join_status == 3:
+                result["domain_name"] = name
+                result["is_domain_joined"] = True
+                result["domain_controller"] = self._get_domain_controller()
+            elif name:
+                result["domain_name"] = name
+        except Exception as e:
+            logger.debug("Failed to get join info: %s", e)
 
         return result
 
     def get_computer_info(self) -> Dict[str, Any]:
-        """
-        Get computer system information including name and domain status.
-
-        Returns:
-            Dictionary with keys:
-                - computer_name: NetBIOS name of the computer
-                - workgroup: Workgroup or domain name
-                - part_of_domain: Boolean indicating domain membership
-        """
+        """Get computer system information."""
         result = {
             "computer_name": socket.gethostname(),
             "workgroup": "Unknown",
-            "part_of_domain": False
+            "part_of_domain": False,
         }
 
         try:
-            # Query Win32_ComputerSystem
-            wmic_result = subprocess.run(
-                ['wmic', 'computersystem', 'get', 'name,workgroup,partofdomainbynet'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-
-            if wmic_result.returncode == 0:
-                lines = [line.strip() for line in wmic_result.stdout.strip().split('\n') if line.strip()]
-                if len(lines) > 1:
-                    parts = lines[1].split()
-                    if len(parts) >= 3:
-                        result["computer_name"] = parts[0]
-                        result["workgroup"] = parts[1]
-                        result["part_of_domain"] = parts[2].lower() == 'true'
-        except Exception:
-            pass
+            name, join_status = win32net.NetGetJoinInformation(None)
+            if join_status == 3:
+                result["workgroup"] = name
+                result["part_of_domain"] = True
+            elif join_status == 2:
+                result["workgroup"] = name
+        except Exception as e:
+            logger.debug("Failed to get computer info: %s", e)
 
         return result
 
     def get_current_user(self) -> Dict[str, str]:
-        """
-        Get current user information including username, domain, SID, and admin status.
+        """Get current user information via Win32 security APIs."""
+        username = get_current_username()
+        user_domain = get_current_domain()
+        sid = get_current_user_sid() or "Unknown"
+        admin = is_user_admin()
 
-        Returns:
-            Dictionary with keys:
-                - username: Current user's username
-                - user_domain: User's domain (or computer name for local users)
-                - sid: User's Security Identifier
-                - is_admin: Boolean indicating if user has admin privileges
-                - full_user: Full username in DOMAIN\\username format
-        """
-        result = {
-            "username": "Unknown",
-            "user_domain": "Unknown",
-            "sid": "Unknown",
-            "is_admin": False,
-            "full_user": "Unknown"
+        return {
+            "username": username,
+            "user_domain": user_domain,
+            "sid": sid,
+            "is_admin": admin,
+            "full_user": f"{user_domain}\\{username}",
         }
 
-        try:
-            # Get current user from environment
-            username = os.getenv('USERNAME')
-            userdomain = os.getenv('USERDOMAIN')
-
-            if username:
-                result["username"] = username
-            if userdomain:
-                result["user_domain"] = userdomain
-
-            if username and userdomain:
-                result["full_user"] = f"{userdomain}\\{username}"
-
-            # Get SID using PowerShell
-            ps_result = subprocess.run(
-                ['powershell', '-Command',
-                 "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-
-            if ps_result.returncode == 0:
-                sid = ps_result.stdout.strip()
-                if sid:
-                    result["sid"] = sid
-
-            # Check admin status using PowerShell
-            admin_result = subprocess.run(
-                ['powershell', '-Command',
-                 '[Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent() | '
-                 'ForEach-Object { $_.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) }'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-
-            if admin_result.returncode == 0:
-                is_admin = admin_result.stdout.strip().lower() == 'true'
-                result["is_admin"] = is_admin
-        except Exception:
-            pass
-
-        return result
-
     def get_network_info(self) -> Dict[str, str]:
-        """
-        Get primary network adapter information including IP address and DNS servers.
-
-        Returns:
-            Dictionary with keys:
-                - primary_ip: Primary IPv4 address
-                - adapter_name: Name of the primary network adapter
-                - dns_servers: List of DNS servers
-                - ipv6_address: Primary IPv6 address (if available)
-        """
+        """Get primary network adapter information via psutil."""
         result = {
             "primary_ip": "Unknown",
             "adapter_name": "Unknown",
             "dns_servers": [],
-            "ipv6_address": "Unknown"
+            "ipv6_address": "Unknown",
         }
 
         try:
-            # Get network configuration using PowerShell
-            ps_result = subprocess.run(
-                ['powershell', '-Command',
-                 'Get-NetIPAddress -AddressFamily IPv4 -PrefixLength 24 | '
-                 'Select-Object IPAddress,InterfaceAlias | ConvertTo-Json'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
+            addrs = psutil.net_if_addrs()
+            stats = psutil.net_if_stats()
 
-            if ps_result.returncode == 0:
-                import json
-                try:
-                    data = json.loads(ps_result.stdout)
-                    if isinstance(data, list) and len(data) > 0:
-                        result["primary_ip"] = data[0].get("IPAddress", "Unknown")
-                        result["adapter_name"] = data[0].get("InterfaceAlias", "Unknown")
-                    elif isinstance(data, dict):
-                        result["primary_ip"] = data.get("IPAddress", "Unknown")
-                        result["adapter_name"] = data.get("InterfaceAlias", "Unknown")
-                except json.JSONDecodeError:
-                    pass
-        except Exception:
-            pass
+            for interface, addr_list in addrs.items():
+                if interface in stats and stats[interface].isup:
+                    ipv4 = None
+                    ipv6 = None
+                    for addr in addr_list:
+                        if addr.family == socket.AF_INET and not addr.address.startswith("127."):
+                            ipv4 = addr.address
+                        elif addr.family == socket.AF_INET6 and not addr.address.startswith("::1"):
+                            if not ipv6:
+                                ipv6 = addr.address
+                    if ipv4:
+                        result["primary_ip"] = ipv4
+                        result["adapter_name"] = interface
+                        if ipv6:
+                            result["ipv6_address"] = ipv6
+                        break
+        except Exception as e:
+            logger.debug("Failed to get network info: %s", e)
 
-        # Get DNS servers
+        # Get DNS servers from WMI COM
         try:
-            dns_result = subprocess.run(
-                ['powershell', '-Command',
-                 'Get-DnsClientServerAddress -AddressFamily IPv4 | '
-                 'Where-Object { $_.ServerAddresses } | Select-Object -ExpandProperty ServerAddresses'],
-                capture_output=True,
-                text=True,
-                timeout=5
+            from src.utils.win32.wmi import WmiConnection
+            conn = WmiConnection()
+            rows = conn.query(
+                "SELECT DNSServerSearchOrder FROM Win32_NetworkAdapterConfiguration "
+                "WHERE IPEnabled = True"
             )
-
-            if dns_result.returncode == 0:
-                dns_servers = [line.strip() for line in dns_result.stdout.strip().split('\n') if line.strip()]
-                if dns_servers:
-                    result["dns_servers"] = dns_servers
-        except Exception:
-            pass
-
-        # Try to get IPv6 address
-        try:
-            ipv6_result = subprocess.run(
-                ['powershell', '-Command',
-                 'Get-NetIPAddress -AddressFamily IPv6 | '
-                 'Where-Object { $_.PrefixLength -eq 64 } | '
-                 'Select-Object -First 1 -ExpandProperty IPAddress'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-
-            if ipv6_result.returncode == 0:
-                ipv6 = ipv6_result.stdout.strip()
-                if ipv6:
-                    result["ipv6_address"] = ipv6
+            dns_list = []
+            for row in rows:
+                servers = row.get("DNSServerSearchOrder")
+                if servers:
+                    for s in servers:
+                        if s and s not in dns_list:
+                            dns_list.append(s)
+            if dns_list:
+                result["dns_servers"] = dns_list
         except Exception:
             pass
 
         return result
 
     def get_azure_ad_info(self) -> Dict[str, Any]:
-        """
-        Check if computer is Azure AD joined using dsregcmd /status.
-
-        Returns:
-            Dictionary with keys:
-                - is_azure_ad_joined: Boolean indicating Azure AD membership
-                - tenant_id: Azure AD tenant ID (if available)
-                - device_id: Azure AD device ID (if available)
-                - device_name: Azure AD device name (if available)
-                - tenant_name: Azure AD tenant name (if available)
-        """
+        """Check if computer is Azure AD joined via registry."""
         result = {
             "is_azure_ad_joined": False,
             "tenant_id": "Unknown",
             "device_id": "Unknown",
             "device_name": "Unknown",
-            "tenant_name": "Unknown"
+            "tenant_name": "Unknown",
         }
 
         try:
-            # Run dsregcmd /status to get Azure AD join status
-            dsreg_result = subprocess.run(
-                ['dsregcmd', '/status'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
+            # Check registry for Azure AD join info
+            join_info_path = r"SYSTEM\CurrentControlSet\Control\CloudDomainJoin\JoinInfo"
+            subkeys = enumerate_subkeys(winreg.HKEY_LOCAL_MACHINE, join_info_path)
 
-            if dsreg_result.returncode == 0:
-                output = dsreg_result.stdout
-                # Parse the output
-                for line in output.split('\n'):
-                    line = line.strip()
-                    if ':' in line:
-                        key, value = line.split(':', 1)
-                        key = key.strip()
-                        value = value.strip()
+            if subkeys:
+                result["is_azure_ad_joined"] = True
+                # First subkey contains join details
+                sk = subkeys[0]
+                full_path = f"{join_info_path}\\{sk}"
 
-                        if key == 'AzureAdJoined' or (key == 'Joined' and 'Azure' in output):
-                            result["is_azure_ad_joined"] = value.lower() == 'yes'
-                        elif key == 'TenantId':
-                            result["tenant_id"] = value
-                        elif key == 'DeviceId':
-                            result["device_id"] = value
-                        elif key == 'DeviceName':
-                            result["device_name"] = value
-                        elif key == 'TenantName':
-                            result["tenant_name"] = value
-        except FileNotFoundError:
-            # dsregcmd might not be available on non-domain machines
-            pass
-        except Exception:
-            pass
+                tenant_id = read_string(winreg.HKEY_LOCAL_MACHINE, full_path, "TenantId")
+                if tenant_id:
+                    result["tenant_id"] = tenant_id
+
+                device_id = read_string(winreg.HKEY_LOCAL_MACHINE, full_path, "DeviceId")
+                if device_id:
+                    result["device_id"] = device_id
+
+                # TenantName may be in a different location
+                tenant_name = read_string(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"SOFTWARE\Microsoft\Windows\CurrentVersion\CDJ\AAD",
+                    "TenantName",
+                )
+                if tenant_name:
+                    result["tenant_name"] = tenant_name
+
+                result["device_name"] = socket.gethostname()
+        except Exception as e:
+            logger.debug("Failed to get Azure AD info: %s", e)
 
         return result
 
     def get_group_policy_info(self) -> Dict[str, Any]:
-        """
-        Check if Group Policy Objects (GPOs) are applied using gpresult.
+        """Get applied GPOs via GetAppliedGPOListW."""
+        computer_policies = get_applied_gpos(machine=True)
+        user_policies = get_applied_gpos(machine=False)
 
-        Returns:
-            Dictionary with keys:
-                - gpos_applied: Boolean indicating if GPOs are applied
-                - applied_gpo_count: Number of applied GPOs
-                - gpresult_available: Boolean indicating if gpresult is available
-                - computer_policies: List of applied computer policies
-                - user_policies: List of applied user policies
-        """
-        result = {
-            "gpos_applied": False,
-            "applied_gpo_count": 0,
+        total = len(computer_policies) + len(user_policies)
+        return {
+            "gpos_applied": total > 0,
+            "applied_gpo_count": total,
             "gpresult_available": True,
-            "computer_policies": [],
-            "user_policies": []
+            "computer_policies": computer_policies,
+            "user_policies": user_policies,
         }
 
-        try:
-            # Run gpresult /h to get detailed GPO information (exports to HTML)
-            # For now, use gpresult /scope:user /scope:computer to check if GPOs exist
-            gpresult_user = subprocess.run(
-                ['gpresult', '/scope:user'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-
-            gpresult_computer = subprocess.run(
-                ['gpresult', '/scope:computer'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-
-            if gpresult_user.returncode == 0 or gpresult_computer.returncode == 0:
-                result["gpos_applied"] = True
-
-                # Parse user policies
-                if gpresult_user.returncode == 0:
-                    user_policies = self._parse_gpresult_output(gpresult_user.stdout)
-                    result["user_policies"] = user_policies
-
-                # Parse computer policies
-                if gpresult_computer.returncode == 0:
-                    computer_policies = self._parse_gpresult_output(gpresult_computer.stdout)
-                    result["computer_policies"] = computer_policies
-
-                # Total GPO count
-                result["applied_gpo_count"] = len(result["user_policies"]) + len(result["computer_policies"])
-        except FileNotFoundError:
-            result["gpresult_available"] = False
-        except Exception:
-            pass
-
-        return result
-
     def _get_domain_controller(self) -> str:
-        """
-        Get the primary domain controller name using PowerShell.
-
-        Returns:
-            Domain controller name or "Unknown" if not available
-        """
+        """Get the primary domain controller name via NetGetDCName."""
         try:
-            ps_result = subprocess.run(
-                ['powershell', '-Command',
-                 '[System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain().FindClosestDomainController().Name'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-
-            if ps_result.returncode == 0:
-                dc_name = ps_result.stdout.strip()
-                if dc_name and dc_name.lower() != 'exception':
-                    return dc_name
+            dc_name = win32net.NetGetDCName(None, None)
+            return dc_name.lstrip("\\") if dc_name else "Unknown"
         except Exception:
-            pass
-
-        return "Unknown"
-
-    def _parse_gpresult_output(self, output: str) -> List[str]:
-        """
-        Parse gpresult command output to extract GPO names.
-
-        Args:
-            output: Output from gpresult command
-
-        Returns:
-            List of GPO names found in the output
-        """
-        policies = []
-        try:
-            for line in output.split('\n'):
-                line = line.strip()
-                # Look for "Applied Group Policy Objects" section
-                if line.startswith('\\') and '\\' in line:
-                    # Extract GPO name (typically in \\DOMAIN\CN=...\ format)
-                    parts = line.split('\\')
-                    if len(parts) > 0:
-                        gpo_name = parts[-1] if parts[-1] else parts[-2]
-                        if gpo_name and gpo_name not in policies:
-                            policies.append(gpo_name)
-        except Exception:
-            pass
-
-        return policies
+            return "Unknown"
 
     def get_all_enterprise_info(self) -> Dict[str, Any]:
-        """Get all enterprise information as a comprehensive dictionary"""
+        """Get all enterprise information as a comprehensive dictionary."""
         return {
             "Domain": self.get_domain_info(),
             "Computer": self.get_computer_info(),
