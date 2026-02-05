@@ -16,6 +16,7 @@
 | Phase 6: UI Polish | **Completed** | - |
 | Phase 7: Performance Optimisation | **Completed** | - |
 | Phase 8: Performance Bottlenecks | **Completed** | [2026-02-04-phase8-performance-design.md](plans/2026-02-04-phase8-performance-design.md) |
+| Phase 9: Native Win32 APIs | **Completed** | [2026-02-05-phase9-native-win32-apis.md](plans/2026-02-05-phase9-native-win32-apis.md) |
 
 ---
 
@@ -68,7 +69,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
   - Context menu for quick actions
 
 ### Drivers Tab
-- **Device Driver Inventory**: PowerShell WMI-based driver enumeration
+- **Device Driver Inventory**: WMI COM-based driver enumeration
 - **Lazy Loading**: Data loaded on first tab activation
 - **Loading Overlay**: Shows loading state while data is fetched
 
@@ -99,13 +100,13 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - `SystemMonitor`: CPU, memory, disk monitoring using psutil
 - `PerformanceMonitor`: Differential rate calculations (disk I/O, network I/O, context switches, interrupts) with thread-safe state
 - `ProcessManager`: Process enumeration with CPU caching for accurate readings
-- `WindowsInfo`: System information retrieval using WMIC, PowerShell, platform
-- `ServiceInfo`: Windows service management via psutil
-- `DriverInfo`: Device driver enumeration via PowerShell WMI
+- `WindowsInfo`: System information via registry, ctypes, WMI COM
+- `ServiceInfo`: Windows service management via win32service SCM API
+- `DriverInfo`: Device driver enumeration via WMI COM
 - `SoftwareInfo`: Installed software from registry (HKLM/HKCU Uninstall, Wow6432Node)
 - `StartupInfo`: Startup apps from registry, startup folders, and Task Scheduler COM
-- `EnterpriseInfo`: Domain, Azure AD, Group Policy information
-- `TaskSchedulerInfo`: Task Scheduler interaction via schtasks command
+- `EnterpriseInfo`: Domain, Azure AD, Group Policy via win32net, registry, ctypes
+- `TaskSchedulerInfo`: Task Scheduler interaction via COM (Schedule.Service)
 - `DataCache[T]`: Generic caching with background loading and thread-safe access
 
 ### UI Layer
@@ -130,16 +131,22 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 ### Utilities
 - `formatters.py`: Data formatting (bytes, uptime, percentages)
 - `thread_utils.py`: Threading workers (SingleRunWorker, LoopingWorker, CancellableWorker)
+- `win32/`: Native Win32 API wrappers:
+  - `registry.py`: Safe winreg wrappers (read_string, read_dword, enumerate_subkeys)
+  - `wmi.py`: Thread-safe WMI COM wrapper (WmiConnection)
+  - `system_info.py`: ctypes kernel32 wrappers (locale, memory, firmware, secure boot)
+  - `security.py`: Token-based SID, admin check, username/domain
+  - `gpo.py`: GPO enumeration via GetAppliedGPOListW
 
 ## Technology Stack
 - Python 3.13
 - PySide6 (Qt for Python)
 - psutil (System monitoring)
-- pywin32 (Windows-specific operations, COM)
+- pywin32 (Windows service management, COM, security tokens)
 - pyqtgraph (Real-time graphs with numpy backend)
 - numpy (Efficient data storage via ring buffers)
-- subprocess (WMIC, PowerShell, schtasks commands)
-- ctypes (Windows API for key state detection)
+- ctypes (Windows API: locale, memory, firmware, GPO, key state)
+- winreg (Registry access for system information)
 
 ## Key Implementation Details
 
@@ -153,8 +160,8 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - Uses Windows API `GetAsyncKeyState(VK_CONTROL)` for real-time state
 
 ### Battery Information
-- WMIC queries unreliable, switched to PowerShell CIM
-- Uses `Get-CimInstance Win32_Battery` with JSON output
+- Uses WMI COM queries (root\cimv2 Win32_Battery + root\WMI BatteryStaticData/BatteryFullChargedCapacity)
+- Power plan from registry (ActivePowerScheme GUID + FriendlyName lookup)
 - Calculates health as `FullChargeCapacity / DesignCapacity * 100`
 - Battery section only shown when battery hardware is detected
 
@@ -206,6 +213,19 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - Antialiasing disabled globally for pyqtgraph
 - clipToView enabled on all graph curves
 - **Impact:** Faster graph draw calls
+
+### Phase 9: Native Win32 APIs
+
+#### Subprocess Elimination
+- Replaced ~56 subprocess/PowerShell/WMIC calls with native Win32 APIs
+- New `src/utils/win32/` package: registry, WMI COM, ctypes, security, GPO helpers
+- Services: win32service SCM API instead of wmic/net commands
+- System info: Registry + ctypes instead of wmic/PowerShell
+- Drivers: WMI COM instead of PowerShell CSV parsing
+- Task Scheduler: COM (Schedule.Service) instead of schtasks parsing
+- Enterprise: win32net + registry + ctypes instead of dsregcmd/gpresult
+- Battery: WMI COM + registry instead of PowerShell
+- **Impact:** Eliminated process spawning overhead, faster data collection, no shell parsing fragility
 
 ### Compilation Options
 

@@ -6,8 +6,8 @@
   - `ProcessManager`: Process enumeration with CPU caching
   - `ServiceInfo`: Windows service management
   - `EnterpriseInfo`: Domain, Azure AD, Group Policy
-  - `TaskSchedulerInfo`: Task Scheduler via schtasks command
-  - `WindowsInfo`: System information (WMIC, PowerShell, platform)
+  - `TaskSchedulerInfo`: Task Scheduler via COM (Schedule.Service)
+  - `WindowsInfo`: System information via registry, ctypes, WMI COM
 - **Caching**: `DataCache[T]` class in `src/services/data_cache.py` for slow operations (registry, WMI)
   - Background loading with `SingleRunWorker` - never block UI thread
   - Thread-safe with QMutex
@@ -26,7 +26,7 @@
 - Registry queries: Check 3 paths (HKLM Uninstall, HKCU Uninstall, HKLM Wow6432Node)
 - Filter system components: Skip if `SystemComponent=1` or `ParentKeyName` exists
 - Software registry keys: DisplayName, Publisher, DisplayVersion, InstallLocation, InstallDate, InstallSource, UninstallString, ModifyPath, EstimatedSize
-- Use PowerShell CIM queries instead of WMIC where possible (more reliable)
+- Use native Win32 APIs via `src/utils/win32/` package (registry, WMI COM, ctypes) — no subprocess calls for data gathering
 - CPU percentages: Normalize by dividing by `cpu_count` to get accurate readings
 
 ## UI Patterns
