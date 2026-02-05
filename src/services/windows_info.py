@@ -4,7 +4,7 @@ import platform
 import socket
 import psutil
 import subprocess
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 
 class WindowsInfo:
@@ -45,7 +45,7 @@ class WindowsInfo:
         # Last resort: use psutil to get CPU count info
         return f"{psutil.cpu_count(logical=False)} Core Processor"
 
-    def get_memory_info(self) -> Dict[str, any]:
+    def get_memory_info(self) -> Dict[str, Any]:
         """Get detailed memory information with per-stick capacity"""
         mem = psutil.virtual_memory()
         total_gb = mem.total / (1024**3)
@@ -87,7 +87,7 @@ class WindowsInfo:
                     except ValueError:
                         continue
                 return capacities
-        except:
+        except Exception:
             pass
         return []
 
@@ -120,7 +120,7 @@ class WindowsInfo:
                         if addr.family == socket.AF_INET:  # IPv4
                             if not addr.address.startswith('127.'):
                                 return f"{interface} ({addr.address})"
-        except:
+        except Exception:
             pass
         return "Not connected"
 
@@ -150,7 +150,7 @@ class WindowsInfo:
                 if len(lines) > 1:
                     domain = lines[1]
                     return domain if domain else "WORKGROUP"
-        except:
+        except Exception:
             pass
         return "Unknown"
 
@@ -167,7 +167,7 @@ class WindowsInfo:
                 lines = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
                 if len(lines) > 1:
                     return lines[1]
-        except:
+        except Exception:
             pass
         return "Unknown"
 
@@ -184,7 +184,7 @@ class WindowsInfo:
                 lines = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
                 if len(lines) > 1:
                     return lines[1]
-        except:
+        except Exception:
             pass
         return "Unknown"
 
@@ -201,7 +201,7 @@ class WindowsInfo:
                 lines = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
                 if len(lines) > 1:
                     return lines[1]
-        except:
+        except Exception:
             pass
         return "Unknown"
 
@@ -218,14 +218,14 @@ class WindowsInfo:
                 locale = result.stdout.strip()
                 if locale:
                     return locale
-        except:
+        except Exception:
             pass
 
         # Fallback to environment variable
         import locale as locale_module
         try:
             return locale_module.getdefaultlocale()[0] or "en-US"
-        except:
+        except Exception:
             return "en-US"
 
     def get_timezone(self) -> str:
@@ -239,7 +239,7 @@ class WindowsInfo:
             )
             if result.returncode == 0:
                 return result.stdout.strip()
-        except:
+        except Exception:
             pass
 
         # Fallback

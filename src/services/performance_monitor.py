@@ -5,6 +5,7 @@ Provides real-time system performance metrics for CPU, memory, disk, and network
 Uses psutil for cross-platform compatibility with Windows optimizations.
 """
 
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -53,6 +54,8 @@ class PerformanceMonitor:
     """
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
+
         # Store previous values for rate calculations
         self._last_cpu_stats: Optional[psutil._common.scpustats] = None
         self._last_cpu_stats_time: Optional[float] = None
@@ -105,67 +108,44 @@ class PerformanceMonitor:
         """Get CPU usage percentage for each core."""
         return psutil.cpu_percent(interval=None, percpu=True)
 
-    def get_context_switch_rate(self) -> float:
+    def get_cpu_rates(self) -> tuple[float, float]:
         """
-        Get context switches per second.
-
-        Uses differential measurement - call periodically for accurate rates.
+        Get context switches/s and interrupts/s from a single snapshot.
 
         Returns:
-            Context switches per second since last call.
+            Tuple of (context_switches_per_sec, interrupts_per_sec).
         """
         try:
             current = psutil.cpu_stats()
             current_time = time.perf_counter()
 
-            if self._last_cpu_stats is None or self._last_cpu_stats_time is None:
+            with self._lock:
+                if self._last_cpu_stats is None or self._last_cpu_stats_time is None:
+                    self._last_cpu_stats = current
+                    self._last_cpu_stats_time = current_time
+                    return 0.0, 0.0
+
+                elapsed = current_time - self._last_cpu_stats_time
+                if elapsed <= 0:
+                    return 0.0, 0.0
+
+                ctx_rate = (current.ctx_switches - self._last_cpu_stats.ctx_switches) / elapsed
+                int_rate = (current.interrupts - self._last_cpu_stats.interrupts) / elapsed
+
                 self._last_cpu_stats = current
                 self._last_cpu_stats_time = current_time
-                return 0.0
 
-            elapsed = current_time - self._last_cpu_stats_time
-            if elapsed <= 0:
-                return 0.0
-
-            rate = (current.ctx_switches - self._last_cpu_stats.ctx_switches) / elapsed
-
-            self._last_cpu_stats = current
-            self._last_cpu_stats_time = current_time
-
-            return max(0.0, rate)
+            return max(0.0, ctx_rate), max(0.0, int_rate)
         except Exception:
-            return 0.0
+            return 0.0, 0.0
+
+    def get_context_switch_rate(self) -> float:
+        """Get context switches per second. Prefer get_cpu_rates() for both values."""
+        return self.get_cpu_rates()[0]
 
     def get_interrupt_rate(self) -> float:
-        """
-        Get interrupts per second.
-
-        Uses differential measurement - call periodically for accurate rates.
-
-        Returns:
-            Interrupts per second since last call.
-        """
-        try:
-            current = psutil.cpu_stats()
-            current_time = time.perf_counter()
-
-            if self._last_cpu_stats is None or self._last_cpu_stats_time is None:
-                self._last_cpu_stats = current
-                self._last_cpu_stats_time = current_time
-                return 0.0
-
-            elapsed = current_time - self._last_cpu_stats_time
-            if elapsed <= 0:
-                return 0.0
-
-            rate = (current.interrupts - self._last_cpu_stats.interrupts) / elapsed
-
-            # Note: We already updated _last_cpu_stats in get_context_switch_rate
-            # if called in same cycle. This is fine - rates are approximate.
-
-            return max(0.0, rate)
-        except Exception:
-            return 0.0
+        """Get interrupts per second. Prefer get_cpu_rates() for both values."""
+        return self.get_cpu_rates()[1]
 
     def get_memory_percent(self) -> float:
         """Get memory usage percentage."""
@@ -197,24 +177,25 @@ class PerformanceMonitor:
             if current is None:
                 return DiskIO(0.0, 0.0, 0.0, 0.0)
 
-            if self._last_disk_io is None or self._last_disk_io_time is None:
+            with self._lock:
+                if self._last_disk_io is None or self._last_disk_io_time is None:
+                    self._last_disk_io = current
+                    self._last_disk_io_time = current_time
+                    return DiskIO(0.0, 0.0, 0.0, 0.0)
+
+                elapsed = current_time - self._last_disk_io_time
+                if elapsed <= 0:
+                    return DiskIO(0.0, 0.0, 0.0, 0.0)
+
+                result = DiskIO(
+                    read_bytes_per_sec=(current.read_bytes - self._last_disk_io.read_bytes) / elapsed,
+                    write_bytes_per_sec=(current.write_bytes - self._last_disk_io.write_bytes) / elapsed,
+                    read_count_per_sec=(current.read_count - self._last_disk_io.read_count) / elapsed,
+                    write_count_per_sec=(current.write_count - self._last_disk_io.write_count) / elapsed,
+                )
+
                 self._last_disk_io = current
                 self._last_disk_io_time = current_time
-                return DiskIO(0.0, 0.0, 0.0, 0.0)
-
-            elapsed = current_time - self._last_disk_io_time
-            if elapsed <= 0:
-                return DiskIO(0.0, 0.0, 0.0, 0.0)
-
-            result = DiskIO(
-                read_bytes_per_sec=(current.read_bytes - self._last_disk_io.read_bytes) / elapsed,
-                write_bytes_per_sec=(current.write_bytes - self._last_disk_io.write_bytes) / elapsed,
-                read_count_per_sec=(current.read_count - self._last_disk_io.read_count) / elapsed,
-                write_count_per_sec=(current.write_count - self._last_disk_io.write_count) / elapsed,
-            )
-
-            self._last_disk_io = current
-            self._last_disk_io_time = current_time
 
             return result
         except Exception:
@@ -233,24 +214,25 @@ class PerformanceMonitor:
             current = psutil.net_io_counters()
             current_time = time.perf_counter()
 
-            if self._last_net_io is None or self._last_net_io_time is None:
+            with self._lock:
+                if self._last_net_io is None or self._last_net_io_time is None:
+                    self._last_net_io = current
+                    self._last_net_io_time = current_time
+                    return NetworkIO(0.0, 0.0, 0.0, 0.0)
+
+                elapsed = current_time - self._last_net_io_time
+                if elapsed <= 0:
+                    return NetworkIO(0.0, 0.0, 0.0, 0.0)
+
+                result = NetworkIO(
+                    bytes_sent_per_sec=(current.bytes_sent - self._last_net_io.bytes_sent) / elapsed,
+                    bytes_recv_per_sec=(current.bytes_recv - self._last_net_io.bytes_recv) / elapsed,
+                    packets_sent_per_sec=(current.packets_sent - self._last_net_io.packets_sent) / elapsed,
+                    packets_recv_per_sec=(current.packets_recv - self._last_net_io.packets_recv) / elapsed,
+                )
+
                 self._last_net_io = current
                 self._last_net_io_time = current_time
-                return NetworkIO(0.0, 0.0, 0.0, 0.0)
-
-            elapsed = current_time - self._last_net_io_time
-            if elapsed <= 0:
-                return NetworkIO(0.0, 0.0, 0.0, 0.0)
-
-            result = NetworkIO(
-                bytes_sent_per_sec=(current.bytes_sent - self._last_net_io.bytes_sent) / elapsed,
-                bytes_recv_per_sec=(current.bytes_recv - self._last_net_io.bytes_recv) / elapsed,
-                packets_sent_per_sec=(current.packets_sent - self._last_net_io.packets_sent) / elapsed,
-                packets_recv_per_sec=(current.packets_recv - self._last_net_io.packets_recv) / elapsed,
-            )
-
-            self._last_net_io = current
-            self._last_net_io_time = current_time
 
             return result
         except Exception:

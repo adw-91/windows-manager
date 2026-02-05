@@ -141,7 +141,7 @@ class TaskSchedulerInfo:
                 timeout=10
             )
             return result.returncode == 0
-        except:
+        except Exception:
             return False
 
     def enable_task(self, task_name: str) -> bool:
@@ -154,7 +154,7 @@ class TaskSchedulerInfo:
                 timeout=10
             )
             return result.returncode == 0
-        except:
+        except Exception:
             return False
 
     def disable_task(self, task_name: str) -> bool:
@@ -167,7 +167,7 @@ class TaskSchedulerInfo:
                 timeout=10
             )
             return result.returncode == 0
-        except:
+        except Exception:
             return False
 
     def end_task(self, task_name: str) -> bool:
@@ -180,7 +180,7 @@ class TaskSchedulerInfo:
                 timeout=10
             )
             return result.returncode == 0
-        except:
+        except Exception:
             return False
 
     def delete_task(self, task_name: str) -> bool:
@@ -193,7 +193,7 @@ class TaskSchedulerInfo:
                 timeout=10
             )
             return result.returncode == 0
-        except:
+        except Exception:
             return False
 
     def create_task(

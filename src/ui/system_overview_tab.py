@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
 )
-from PySide6.QtCore import Qt, Slot, Signal
+from PySide6.QtCore import Qt, Slot
 
 from src.ui.widgets.expandable_metric_tile import ExpandableMetricTile
 from src.ui.widgets.collapsible_section import CollapsibleSection
@@ -98,10 +98,6 @@ class SystemOverviewTab(QWidget):
     UPDATE_INTERVAL_MS = 1000  # 1 second for tile values
     GRAPH_INTERVAL_MS = 500   # 500ms for graph updates
 
-    # Signals for startup readiness tracking
-    system_info_ready = Signal()
-    first_metrics_ready = Signal()
-
     def __init__(self) -> None:
         super().__init__()
         self._system_monitor = SystemMonitor()
@@ -110,7 +106,6 @@ class SystemOverviewTab(QWidget):
         self._perf_monitor = get_performance_monitor()
         self._workers: list[LoopingWorker] = []
         self._expanded_tile = None  # Track which tile is expanded
-        self._first_metrics_received = False  # Track if first metrics arrived
 
         # Software cache for installed applications
         self._software_cache = get_software_cache()
@@ -437,9 +432,6 @@ class SystemOverviewTab(QWidget):
         self._processor_name = system_info.get("Processor", "Unknown")
         self._cpu_tile.set_subtitle(self._processor_name)
 
-        # Signal that system info is ready
-        self.system_info_ready.emit()
-
     def _load_system_info(self) -> None:
         """Load static system information (synchronous, for refresh)."""
         system_info = self._windows_info.get_all_system_info()
@@ -539,6 +531,7 @@ class SystemOverviewTab(QWidget):
         cpu_count = psutil.cpu_count(logical=False) or 0
         cpu_logical = psutil.cpu_count(logical=True) or 0
         cpu_freq = psutil.cpu_freq()
+        ctx_rate, int_rate = self._perf_monitor.get_cpu_rates()
 
         pids = psutil.pids()
         process_count = len(pids)
@@ -584,8 +577,8 @@ class SystemOverviewTab(QWidget):
                 "Processes": str(process_count),
                 "Threads": f"~{thread_count:,}",
                 "Handles": f"~{handle_count:,}" if handle_count else "N/A",
-                "Context Switches/s": f"{self._perf_monitor.get_context_switch_rate():,.0f}",
-                "Interrupts/s": f"{self._perf_monitor.get_interrupt_rate():,.0f}",
+                "Context Switches/s": f"{ctx_rate:,.0f}",
+                "Interrupts/s": f"{int_rate:,.0f}",
             },
             "memory": {
                 "Total": format_bytes(mem.total),
@@ -637,11 +630,6 @@ class SystemOverviewTab(QWidget):
             min(net_total / 10, 100),
             f"↓{data['net_down']:.0f} ↑{data['net_up']:.0f} KB/s"
         )
-
-        # Signal first metrics ready (once)
-        if not self._first_metrics_received:
-            self._first_metrics_received = True
-            self.first_metrics_ready.emit()
 
     @Slot(object)
     def _update_graphs(self, data: dict) -> None:

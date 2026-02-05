@@ -1,7 +1,7 @@
 """System Monitor Service - Tracks system resources and performance metrics"""
 
 import psutil
-from typing import Dict, List
+from typing import Any, Dict, List
 
 
 class SystemMonitor:
@@ -24,7 +24,7 @@ class SystemMonitor:
             "percent": mem.percent,
         }
 
-    def get_disk_info(self) -> List[Dict[str, any]]:
+    def get_disk_info(self) -> List[Dict[str, Any]]:
         """Get disk usage information for all drives"""
         disks = []
         for partition in psutil.disk_partitions():
@@ -54,7 +54,7 @@ class SystemMonitor:
         battery = psutil.sensors_battery()
         return battery is not None
 
-    def get_battery_info(self) -> Dict[str, any]:
+    def get_battery_info(self) -> Dict[str, Any]:
         """Get battery status information"""
         battery = psutil.sensors_battery()
         if battery is None:

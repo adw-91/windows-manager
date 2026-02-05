@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QStatusBar, QPushButton, QFrame,
     QSizePolicy, QSplitter
 )
-from PySide6.QtCore import Qt, Slot, Signal
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QAction
 
 from .system_overview_tab import SystemOverviewTab
@@ -152,18 +152,11 @@ class SidebarWidget(QFrame):
 class MainWindow(QMainWindow):
     """Main application window with sidebar navigation"""
 
-    # Emitted when critical content is loaded and window is ready to show
-    ready_to_show = Signal()
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Windows Manager")
         self.setMinimumSize(900, 650)
         self.resize(1000, 750)
-
-        # Track readiness state
-        self._system_info_ready = False
-        self._first_metrics_ready = False
 
         self.init_ui()
         self.create_menu_bar()
@@ -199,10 +192,6 @@ class MainWindow(QMainWindow):
         self.tasks_tab = TaskSchedulerTab()
         self.enterprise_tab = EnterpriseTab()
 
-        # Connect to overview tab readiness signals
-        self.overview_tab.system_info_ready.connect(self._on_system_info_ready)
-        self.overview_tab.first_metrics_ready.connect(self._on_first_metrics_ready)
-
         self._content_stack.addWidget(self.overview_tab)
         self._content_stack.addWidget(self.system_tab)
         self._content_stack.addWidget(self.processes_services_tab)
@@ -232,23 +221,6 @@ class MainWindow(QMainWindow):
             self.enterprise_tab.on_tab_activated()
 
         self._content_stack.setCurrentIndex(index)
-
-    @Slot()
-    def _on_system_info_ready(self) -> None:
-        """Handle system info loaded."""
-        self._system_info_ready = True
-        self._check_ready_to_show()
-
-    @Slot()
-    def _on_first_metrics_ready(self) -> None:
-        """Handle first metrics received."""
-        self._first_metrics_ready = True
-        self._check_ready_to_show()
-
-    def _check_ready_to_show(self) -> None:
-        """Check if critical content is ready and emit signal."""
-        if self._system_info_ready and self._first_metrics_ready:
-            self.ready_to_show.emit()
 
     def prewarm_caches(self) -> None:
         """
@@ -330,7 +302,7 @@ class MainWindow(QMainWindow):
     def _navigate_to(self, index: int) -> None:
         """Navigate to a specific page."""
         self._sidebar.set_selected(index)
-        self._content_stack.setCurrentIndex(index)
+        self._on_nav_changed(index)
 
     def create_status_bar(self):
         """Create status bar"""

@@ -1,7 +1,7 @@
 """Process Manager Service - Manages Windows processes"""
 
 import psutil
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from threading import Lock
 
 
@@ -15,7 +15,7 @@ class ProcessManager:
         self._initialized = False
         self._cpu_count = psutil.cpu_count() or 1
 
-    def get_all_processes(self) -> List[Dict[str, any]]:
+    def get_all_processes(self) -> List[Dict[str, Any]]:
         """Get list of all running processes with accurate CPU readings."""
         processes = []
         current_pids = set()
@@ -75,7 +75,7 @@ class ProcessManager:
         self._initialized = True
         return processes
 
-    def get_process_info(self, pid: int) -> Optional[Dict[str, any]]:
+    def get_process_info(self, pid: int) -> Optional[Dict[str, Any]]:
         """Get detailed information about a specific process"""
         try:
             proc = psutil.Process(pid)

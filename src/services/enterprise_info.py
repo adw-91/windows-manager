@@ -3,7 +3,7 @@
 import subprocess
 import socket
 import os
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 
 
 class EnterpriseInfo:
@@ -54,7 +54,7 @@ class EnterpriseInfo:
 
         return result
 
-    def get_computer_info(self) -> Dict[str, any]:
+    def get_computer_info(self) -> Dict[str, Any]:
         """
         Get computer system information including name and domain status.
 
@@ -240,7 +240,7 @@ class EnterpriseInfo:
 
         return result
 
-    def get_azure_ad_info(self) -> Dict[str, any]:
+    def get_azure_ad_info(self) -> Dict[str, Any]:
         """
         Check if computer is Azure AD joined using dsregcmd /status.
 
@@ -279,7 +279,7 @@ class EnterpriseInfo:
                         key = key.strip()
                         value = value.strip()
 
-                        if key == 'AzureAdJoined' or key == 'Joined' and 'Azure' in output:
+                        if key == 'AzureAdJoined' or (key == 'Joined' and 'Azure' in output):
                             result["is_azure_ad_joined"] = value.lower() == 'yes'
                         elif key == 'TenantId':
                             result["tenant_id"] = value
@@ -297,7 +297,7 @@ class EnterpriseInfo:
 
         return result
 
-    def get_group_policy_info(self) -> Dict[str, any]:
+    def get_group_policy_info(self) -> Dict[str, Any]:
         """
         Check if Group Policy Objects (GPOs) are applied using gpresult.
 
@@ -408,7 +408,7 @@ class EnterpriseInfo:
 
         return policies
 
-    def get_all_enterprise_info(self) -> Dict[str, any]:
+    def get_all_enterprise_info(self) -> Dict[str, Any]:
         """Get all enterprise information as a comprehensive dictionary"""
         return {
             "Domain": self.get_domain_info(),

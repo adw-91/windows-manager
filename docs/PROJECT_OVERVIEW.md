@@ -26,18 +26,18 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 ## Current Features
 
 ### Overview Tab
-- **Live Metrics Tiles**: Real-time display of:
-  - CPU Usage (percentage with progress bar)
-  - Memory Usage (percentage and GB used/total)
-  - Disk Usage (average across all drives)
-  - System Uptime (formatted time display)
+- **Expandable Metric Tiles**: Real-time display with click-to-expand live graphs:
+  - CPU Usage (user/system/idle breakdown, context switches, interrupts)
+  - Memory Usage (total, available, cached, committed)
+  - Disk Activity (read/write MB/s, active time, IOPS)
+  - Network (download/upload KB/s, adapter info, IPv4)
 
-- **Collapsible Sections**: Expandable sections that fill available vertical space
-  - System Information
-  - Quick Actions
-  - Recent Activity
+- **Collapsible Sections**: Expandable sections (accordion-style, one at a time):
+  - Installed Software (table with name, publisher, version, size)
+  - Startup Apps (registry, startup folder, task scheduler sources)
+  - Battery (health, cycle count, capacity - shown only on laptops)
 
-- **Auto-refresh**: Metrics update every 2 seconds
+- **Auto-refresh**: Tile values update every 1 second, graphs every 500ms
 
 ### System Tab
 - **Card-based UI**: Modern card layout with msinfo32-style information
@@ -67,17 +67,17 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
   - Search/filter by name, display name, or status
   - Context menu for quick actions
 
-### Software Tab
-- **Installed Programs**: Registry-based software inventory
-  - Searches HKLM Uninstall, HKCU Uninstall, Wow6432Node
-  - Filters out system components
-- **Startup**: Startup program management
+### Drivers Tab
+- **Device Driver Inventory**: PowerShell WMI-based driver enumeration
+- **Lazy Loading**: Data loaded on first tab activation
+- **Loading Overlay**: Shows loading state while data is fetched
 
 ### Enterprise Tab
 - **Current User**: Username, domain, full name, SID, admin status
 - **Entra ID**: Azure AD join status, tenant ID/name, device ID
 - **Domain**: Computer name, domain/workgroup, domain joined status, DC
 - **Group Policy**: GPO applied status, count, computer/user policies
+- **Lazy Loading**: Data loaded on first tab activation
 
 ### Task Scheduler Tab
 - **Modern UI**: Tree navigation + task table + details panel
@@ -87,44 +87,45 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
   - Program path, arguments, working directory
   - Admin privileges warning banner
 - **RAG Coloring**: Task status and last result indicators
+- **Lazy Loading**: Data loaded on first tab activation
 
 ### Sidebar
-- **Navigation**: Tab switching via icon buttons
-- **Battery Widget**:
-  - Design capacity vs full charge capacity
-  - Battery health percentage
-  - Cycle count and manufacturer
-  - PowerShell CIM-based queries (replaces WMIC)
+- **Navigation**: Tab switching via icon buttons (Overview, System, Processes, Drivers, Tasks, Enterprise)
+- **Keyboard Shortcuts**: Ctrl+1 through Ctrl+6 for quick tab switching
 
 ## Architecture
 
 ### Services Layer
 - `SystemMonitor`: CPU, memory, disk monitoring using psutil
+- `PerformanceMonitor`: Differential rate calculations (disk I/O, network I/O, context switches, interrupts) with thread-safe state
 - `ProcessManager`: Process enumeration with CPU caching for accurate readings
 - `WindowsInfo`: System information retrieval using WMIC, PowerShell, platform
 - `ServiceInfo`: Windows service management via psutil
+- `DriverInfo`: Device driver enumeration via PowerShell WMI
+- `SoftwareInfo`: Installed software from registry (HKLM/HKCU Uninstall, Wow6432Node)
+- `StartupInfo`: Startup apps from registry, startup folders, and Task Scheduler COM
 - `EnterpriseInfo`: Domain, Azure AD, Group Policy information
 - `TaskSchedulerInfo`: Task Scheduler interaction via schtasks command
-- `DataCache[T]`: Generic caching with background loading
+- `DataCache[T]`: Generic caching with background loading and thread-safe access
 
 ### UI Layer
 - `MainWindow`: Main application window with sidebar navigation
 - Tab implementations:
-  - `SystemOverviewTab`: Live metrics with collapsible sections
+  - `SystemOverviewTab`: Live metric tiles with expandable graphs and collapsible sections
   - `SystemTab`: Card-based system information
   - `ProcessesServicesTab`: Process and service management
-  - `SoftwareTab`: Software inventory and startup
+  - `DriversTab`: Device driver inventory
   - `EnterpriseTab`: Domain and Azure AD information
   - `TaskSchedulerTab`: Task Scheduler management
 
 ### Widgets
-- `MetricTile`: Reusable tile for displaying metrics with progress bars
-- `ExpandableMetricTile`: Tile with expandable details
-- `CollapsibleSection`: Expandable/collapsible content section
+- `ExpandableMetricTile`: Metric tile with click-to-expand live graph and detail labels
+- `CollapsibleSection`: Expandable/collapsible content section (accordion)
 - `FlowLayout`: Custom layout for natural key-value pair reflow
 - `BatteryWidget`: Battery status display with health info
+- `LiveGraph` / `MultiLineGraph`: Real-time graph widgets using pyqtgraph with ring buffers
 - `LoadingOverlay`: Loading indicator overlay
-- `LiveGraph`: Real-time graph widget using pyqtgraph
+- `SoftwareTableWidget`: Sortable/searchable software table
 
 ### Utilities
 - `formatters.py`: Data formatting (bytes, uptime, percentages)
@@ -134,7 +135,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - Python 3.13
 - PySide6 (Qt for Python)
 - psutil (System monitoring)
-- pywin32 (Windows-specific operations)
+- pywin32 (Windows-specific operations, COM)
 - pyqtgraph (Real-time graphs with numpy backend)
 - numpy (Efficient data storage via ring buffers)
 - subprocess (WMIC, PowerShell, schtasks commands)
@@ -155,6 +156,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - WMIC queries unreliable, switched to PowerShell CIM
 - Uses `Get-CimInstance Win32_Battery` with JSON output
 - Calculates health as `FullChargeCapacity / DesignCapacity * 100`
+- Battery section only shown when battery hardware is detected
 
 ### FlowLayout
 - Custom QLayout that arranges widgets horizontally
@@ -166,27 +168,44 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 
 ## Performance Optimisations (Implemented)
 
-The following optimisations have been implemented to improve UI responsiveness:
+### Phase 7 Optimisations
 
-### Cache Pre-warming
-- Background cache loading starts 500ms after window is shown
-- Task Scheduler and Enterprise info caches are pre-loaded
-- **Impact:** Tabs load faster when first accessed (data already available)
-
-### Deferred Graph Creation
+#### Deferred Graph Creation
 - pyqtgraph widgets are created on first tile expansion (not at startup)
 - Avoids OpenGL context setup until graphs are actually needed
 - **Impact:** Tile clicks are responsive; graph creation cost paid once
 
-### Resize Debouncing
-- Graph resize events are debounced with 50ms delay
-- Prevents per-pixel redraws during window drag operations
-- **Impact:** Smooth window resizing without lag
-
-### Batch Graph Updates
+#### Batch Graph Updates
 - Multiple series updated in single repaint batch via `add_points()` method
 - Reduces repaint count from N (number of series) to 1 per update cycle
 - **Impact:** More efficient graph rendering for CPU, Disk, Network tiles
+
+### Phase 8 Optimisations
+
+#### Lazy Tab Loading
+- Drivers, Tasks, and Enterprise tabs load data on first activation
+- Tables show loading overlay until data arrives
+- **Impact:** Faster startup, no unnecessary subprocess calls
+
+#### Graph Visibility Pausing
+- LoopingWorkers pause when Overview tab is not visible
+- Resume automatically when tab becomes active again
+- **Impact:** Zero CPU cost from graphs when viewing other tabs
+
+#### Expanded-Only Graph Updates
+- Only the currently expanded tile's graph receives data updates
+- Collapsed tile graphs are not rendered
+- **Impact:** Reduced per-cycle rendering cost
+
+#### Resize Debouncing
+- Graph resize events are debounced with 150ms delay
+- Skip rendering during resize, refresh all curves after resize completes
+- **Impact:** Smooth window resizing without graph lag
+
+#### Simplified Graph Rendering
+- Antialiasing disabled globally for pyqtgraph
+- clipToView enabled on all graph curves
+- **Impact:** Faster graph draw calls
 
 ### Compilation Options
 
@@ -201,4 +220,4 @@ nuitka --standalone --enable-plugin=pyside6 --windows-console-mode=disable run_a
 
 ### Realistic Expectations
 
-Python/Qt will never match native Rust/C++ responsiveness for this type of application. The optimisations above can improve perceived performance from "sluggish" to "acceptable", but not to "snappy". For maximum responsiveness, consider the parallel Rust implementation (`windows-manager-rust`).
+Python/Qt will never match native Rust/C++ responsiveness for this type of application. The optimisations above can improve perceived performance from "sluggish" to "acceptable", but not to "snappy". For maximum responsiveness, consider a parallel Rust implementation.

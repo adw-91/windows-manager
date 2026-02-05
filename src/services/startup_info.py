@@ -24,6 +24,14 @@ class StartupInfo:
         (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce", "HKCU RunOnce"),
     ]
 
+    # Map location names to registry hive/path tuples
+    LOCATION_MAP = {
+        "HKLM Run": (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+        "HKLM RunOnce": (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"),
+        "HKCU Run": (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+        "HKCU RunOnce": (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"),
+    }
+
     def __init__(self):
         """Initialize the service."""
         pass
@@ -260,22 +268,10 @@ class StartupInfo:
         Returns:
             True if successful, False otherwise
         """
-        # Only handle registry entries for now
-        if "Run" not in location:
+        if location not in self.LOCATION_MAP:
             return False
 
-        # Map location to registry path
-        location_map = {
-            "HKLM Run": (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
-            "HKLM RunOnce": (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"),
-            "HKCU Run": (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
-            "HKCU RunOnce": (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"),
-        }
-
-        if location not in location_map:
-            return False
-
-        hkey, path = location_map[location]
+        hkey, path = self.LOCATION_MAP[location]
         current_name = original_name if original_name else name
 
         try:
@@ -324,18 +320,10 @@ class StartupInfo:
         Returns:
             True if successful, False otherwise
         """
-        # Map location to registry path
-        location_map = {
-            "HKLM Run": (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
-            "HKLM RunOnce": (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"),
-            "HKCU Run": (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
-            "HKCU RunOnce": (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"),
-        }
-
-        if location not in location_map:
+        if location not in self.LOCATION_MAP:
             return False
 
-        hkey, path = location_map[location]
+        hkey, path = self.LOCATION_MAP[location]
 
         try:
             with winreg.OpenKey(hkey, path, 0, winreg.KEY_WRITE) as key:
@@ -356,22 +344,10 @@ class StartupInfo:
         Returns:
             True if successful, False otherwise
         """
-        # Only handle registry entries for now
-        if "Run" not in location:
+        if location not in self.LOCATION_MAP:
             return False
 
-        # Map location to registry path
-        location_map = {
-            "HKLM Run": (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
-            "HKLM RunOnce": (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"),
-            "HKCU Run": (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
-            "HKCU RunOnce": (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"),
-        }
-
-        if location not in location_map:
-            return False
-
-        hkey, path = location_map[location]
+        hkey, path = self.LOCATION_MAP[location]
 
         try:
             with winreg.OpenKey(hkey, path, 0, winreg.KEY_WRITE) as key:
