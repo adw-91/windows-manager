@@ -27,6 +27,7 @@ class FlowLayout(QLayout):
         self._item_list: list[QWidgetItem] = []
         self._h_spacing = h_spacing
         self._v_spacing = v_spacing
+        self._cached_width: int = -1
 
         if margin >= 0:
             self.setContentsMargins(margin, margin, margin, margin)
@@ -39,6 +40,7 @@ class FlowLayout(QLayout):
     def addItem(self, item: QWidgetItem) -> None:
         """Add an item to the layout."""
         self._item_list.append(item)
+        self._cached_width = -1
 
     def horizontalSpacing(self) -> int:
         """Return the horizontal spacing between items."""
@@ -69,6 +71,7 @@ class FlowLayout(QLayout):
     def takeAt(self, index: int) -> QWidgetItem | None:
         """Remove and return the item at the given index."""
         if 0 <= index < len(self._item_list):
+            self._cached_width = -1
             return self._item_list.pop(index)
         return None
 
@@ -87,7 +90,10 @@ class FlowLayout(QLayout):
     def setGeometry(self, rect: QRect) -> None:
         """Set the geometry of the layout and arrange items."""
         super().setGeometry(rect)
+        if rect.width() == self._cached_width:
+            return
         self._do_layout(rect, test_only=False)
+        self._cached_width = rect.width()
 
     def sizeHint(self) -> QSize:
         """Return the preferred size."""
