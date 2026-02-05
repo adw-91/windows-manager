@@ -1,9 +1,23 @@
-"""Task Scheduler Service - Interface to Windows Task Scheduler."""
+"""Task Scheduler Service - Interface to Windows Task Scheduler via COM."""
 
+import logging
 import subprocess
+import pythoncom
+import win32com.client
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+# Task state mapping from COM constants
+_STATE_MAP = {
+    0: "Unknown",
+    1: "Disabled",
+    2: "Queued",
+    3: "Ready",
+    4: "Running",
+}
 
 
 @dataclass
@@ -22,178 +36,168 @@ class ScheduledTask:
 
 
 class TaskSchedulerInfo:
-    """Interface to Windows Task Scheduler using schtasks command."""
+    """Interface to Windows Task Scheduler using COM (Schedule.Service)."""
 
     def __init__(self):
         self._tasks_cache: List[ScheduledTask] = []
 
+    def _connect(self) -> win32com.client.CDispatch:
+        """Connect to the Task Scheduler service."""
+        pythoncom.CoInitialize()
+        scheduler = win32com.client.Dispatch("Schedule.Service")
+        scheduler.Connect()
+        return scheduler
+
     def get_all_tasks(self) -> List[Dict]:
-        """Get all scheduled tasks."""
+        """Get all scheduled tasks via COM."""
         tasks = []
         try:
-            # Use schtasks to get task list in CSV format
-            result = subprocess.run(
-                ['schtasks', '/query', '/fo', 'CSV', '/v'],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                encoding='utf-8',
-                errors='replace'
-            )
-
-            if result.returncode == 0:
-                lines = result.stdout.strip().split('\n')
-                if len(lines) > 1:
-                    # Parse CSV header
-                    headers = self._parse_csv_line(lines[0])
-
-                    # Find column indices
-                    col_map = {}
-                    for i, h in enumerate(headers):
-                        h_lower = h.lower().strip('"')
-                        if 'taskname' in h_lower or h_lower == 'taskname':
-                            col_map['name'] = i
-                        elif 'status' in h_lower:
-                            col_map['state'] = i
-                        elif 'last run time' in h_lower:
-                            col_map['last_run'] = i
-                        elif 'next run time' in h_lower:
-                            col_map['next_run'] = i
-                        elif 'last result' in h_lower:
-                            col_map['last_result'] = i
-                        elif 'author' in h_lower:
-                            col_map['author'] = i
-                        elif 'task to run' in h_lower:
-                            col_map['action'] = i
-                        elif 'scheduled task state' in h_lower:
-                            col_map['enabled'] = i
-
-                    # Parse task rows
-                    for line in lines[1:]:
-                        if not line.strip():
-                            continue
-
-                        values = self._parse_csv_line(line)
-                        if len(values) > max(col_map.values(), default=0):
-                            task = {
-                                'name': self._get_col(values, col_map, 'name', ''),
-                                'state': self._get_col(values, col_map, 'state', 'Unknown'),
-                                'last_run': self._get_col(values, col_map, 'last_run', 'Never'),
-                                'next_run': self._get_col(values, col_map, 'next_run', 'N/A'),
-                                'last_result': self._get_col(values, col_map, 'last_result', '0'),
-                                'author': self._get_col(values, col_map, 'author', ''),
-                                'action': self._get_col(values, col_map, 'action', ''),
-                                'enabled': self._get_col(values, col_map, 'enabled', 'Enabled'),
-                            }
-
-                            # Extract path from full task name
-                            full_name = task['name']
-                            if '\\' in full_name:
-                                parts = full_name.rsplit('\\', 1)
-                                task['path'] = parts[0] if parts[0] else '\\'
-                                task['short_name'] = parts[1]
-                            else:
-                                task['path'] = '\\'
-                                task['short_name'] = full_name
-
-                            # Skip empty names
-                            if task['short_name']:
-                                tasks.append(task)
-
-        except subprocess.TimeoutExpired:
-            pass
+            scheduler = self._connect()
+            root = scheduler.GetFolder("\\")
+            self._enumerate_folder(root, tasks)
         except Exception as e:
-            pass
-
+            logger.warning("Failed to enumerate tasks: %s", e)
         return tasks
 
-    def _parse_csv_line(self, line: str) -> List[str]:
-        """Parse a CSV line handling quoted fields."""
-        values = []
-        current = ""
-        in_quotes = False
+    def _enumerate_folder(self, folder: win32com.client.CDispatch, tasks: List[Dict]) -> None:
+        """Recursively enumerate tasks in a folder."""
+        try:
+            for task in folder.GetTasks(0):  # 0 = include hidden tasks
+                try:
+                    full_path = task.Path
+                    state_num = task.State
+                    state_str = _STATE_MAP.get(state_num, "Unknown")
 
-        for char in line:
-            if char == '"':
-                in_quotes = not in_quotes
-            elif char == ',' and not in_quotes:
-                values.append(current.strip('"').strip())
-                current = ""
-            else:
-                current += char
+                    # Format datetime values
+                    last_run = self._format_datetime(task.LastRunTime)
+                    next_run = self._format_datetime(task.NextRunTime)
+                    last_result = str(task.LastTaskResult)
 
-        values.append(current.strip('"').strip())
-        return values
+                    # Get author from definition
+                    author = ""
+                    try:
+                        author = task.Definition.RegistrationInfo.Author or ""
+                    except Exception:
+                        pass
 
-    def _get_col(self, values: List[str], col_map: Dict, key: str, default: str) -> str:
-        """Safely get column value."""
-        if key in col_map and col_map[key] < len(values):
-            return values[col_map[key]]
-        return default
+                    # Get action info
+                    action = ""
+                    try:
+                        actions = task.Definition.Actions
+                        if actions.Count > 0:
+                            action = actions.Item(1).Path or ""
+                    except Exception:
+                        pass
 
-    def run_task(self, task_name: str) -> bool:
+                    # Extract path and short name
+                    if "\\" in full_path:
+                        parts = full_path.rsplit("\\", 1)
+                        path = parts[0] if parts[0] else "\\"
+                        short_name = parts[1]
+                    else:
+                        path = "\\"
+                        short_name = full_path
+
+                    enabled = "Enabled" if task.Enabled else "Disabled"
+
+                    if short_name:
+                        tasks.append({
+                            "name": full_path,
+                            "state": state_str,
+                            "last_run": last_run,
+                            "next_run": next_run,
+                            "last_result": last_result,
+                            "author": author,
+                            "action": action,
+                            "enabled": enabled,
+                            "path": path,
+                            "short_name": short_name,
+                        })
+                except Exception:
+                    continue
+
+            # Recurse into subfolders
+            for subfolder in folder.GetFolders(0):
+                self._enumerate_folder(subfolder, tasks)
+        except Exception as e:
+            logger.debug("Error enumerating folder: %s", e)
+
+    def _format_datetime(self, dt_value) -> str:
+        """Format a COM datetime value to string."""
+        try:
+            if dt_value and hasattr(dt_value, "year"):
+                if dt_value.year < 2000:
+                    return "Never"
+                return dt_value.strftime("%Y-%m-%d %H:%M")
+            return str(dt_value) if dt_value else "N/A"
+        except Exception:
+            return "N/A"
+
+    def run_task(self, task_path: str) -> bool:
         """Run a scheduled task immediately."""
         try:
-            result = subprocess.run(
-                ['schtasks', '/run', '/tn', task_name],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            return result.returncode == 0
-        except Exception:
+            scheduler = self._connect()
+            root = scheduler.GetFolder("\\")
+            task = root.GetTask(task_path)
+            task.Run(None)
+            return True
+        except Exception as e:
+            logger.warning("Failed to run task '%s': %s", task_path, e)
             return False
 
-    def enable_task(self, task_name: str) -> bool:
+    def enable_task(self, task_path: str) -> bool:
         """Enable a scheduled task."""
         try:
-            result = subprocess.run(
-                ['schtasks', '/change', '/tn', task_name, '/enable'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            return result.returncode == 0
-        except Exception:
+            scheduler = self._connect()
+            root = scheduler.GetFolder("\\")
+            task = root.GetTask(task_path)
+            task.Enabled = True
+            return True
+        except Exception as e:
+            logger.warning("Failed to enable task '%s': %s", task_path, e)
             return False
 
-    def disable_task(self, task_name: str) -> bool:
+    def disable_task(self, task_path: str) -> bool:
         """Disable a scheduled task."""
         try:
-            result = subprocess.run(
-                ['schtasks', '/change', '/tn', task_name, '/disable'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            return result.returncode == 0
-        except Exception:
+            scheduler = self._connect()
+            root = scheduler.GetFolder("\\")
+            task = root.GetTask(task_path)
+            task.Enabled = False
+            return True
+        except Exception as e:
+            logger.warning("Failed to disable task '%s': %s", task_path, e)
             return False
 
-    def end_task(self, task_name: str) -> bool:
+    def end_task(self, task_path: str) -> bool:
         """End/stop a running task."""
         try:
-            result = subprocess.run(
-                ['schtasks', '/end', '/tn', task_name],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            return result.returncode == 0
-        except Exception:
+            scheduler = self._connect()
+            root = scheduler.GetFolder("\\")
+            task = root.GetTask(task_path)
+            task.Stop(0)
+            return True
+        except Exception as e:
+            logger.warning("Failed to end task '%s': %s", task_path, e)
             return False
 
-    def delete_task(self, task_name: str) -> bool:
+    def delete_task(self, task_path: str) -> bool:
         """Delete a scheduled task."""
         try:
-            result = subprocess.run(
-                ['schtasks', '/delete', '/tn', task_name, '/f'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            return result.returncode == 0
-        except Exception:
+            scheduler = self._connect()
+            # Find the folder containing the task
+            if "\\" in task_path:
+                parts = task_path.rsplit("\\", 1)
+                folder_path = parts[0] if parts[0] else "\\"
+                task_name = parts[1]
+            else:
+                folder_path = "\\"
+                task_name = task_path
+            folder = scheduler.GetFolder(folder_path)
+            folder.DeleteTask(task_name, 0)
+            return True
+        except Exception as e:
+            logger.warning("Failed to delete task '%s': %s", task_path, e)
             return False
 
     def create_task(
@@ -209,67 +213,40 @@ class TaskSchedulerInfo:
         interval: int = 1,
         days: Optional[str] = None
     ) -> tuple[bool, str]:
-        """
-        Create a new scheduled task.
-
-        Args:
-            task_name: Name of the task
-            program: Path to program to run
-            schedule_type: ONCE, DAILY, WEEKLY, MONTHLY, ONSTART, ONLOGON
-            start_time: Start time in HH:MM format
-            start_date: Start date in MM/DD/YYYY format (for ONCE)
-            arguments: Arguments to pass to program
-            working_dir: Working directory
-            run_as_system: Run as SYSTEM user
-            interval: Interval modifier (e.g., every N days)
-            days: Days for WEEKLY (MON,TUE,etc) or day of month
-
-        Returns:
-            Tuple of (success, error_message)
-        """
+        """Create a new scheduled task using schtasks (complex COM registration avoided)."""
         try:
-            # Build command to run
             command = program
             if arguments:
                 command = f'{program} {arguments}'
 
-            # Build schtasks command
             cmd = [
                 'schtasks', '/create',
                 '/tn', task_name,
                 '/tr', command,
                 '/sc', schedule_type,
-                '/f'  # Force overwrite if exists
+                '/f'
             ]
 
-            # Add schedule-specific parameters
             if schedule_type in ('DAILY', 'WEEKLY', 'MONTHLY', 'ONCE'):
                 if start_time:
                     cmd.extend(['/st', start_time])
                 if start_date and schedule_type == 'ONCE':
                     cmd.extend(['/sd', start_date])
 
-            # Add interval modifier
             if schedule_type in ('DAILY', 'WEEKLY', 'MONTHLY') and interval > 1:
                 cmd.extend(['/mo', str(interval)])
 
-            # Add days for WEEKLY
             if schedule_type == 'WEEKLY' and days:
                 cmd.extend(['/d', days])
 
-            # Add day of month for MONTHLY
             if schedule_type == 'MONTHLY' and days:
                 cmd.extend(['/d', days])
 
-            # Run as SYSTEM or interactive user
             if run_as_system:
                 cmd.extend(['/ru', 'SYSTEM'])
 
             result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=15
+                cmd, capture_output=True, text=True, timeout=15
             )
 
             if result.returncode == 0:
@@ -284,20 +261,25 @@ class TaskSchedulerInfo:
             return False, str(e)
 
     def get_task_folders(self) -> List[str]:
-        """Get list of task scheduler folders."""
+        """Get list of task scheduler folders via COM."""
         folders = set()
-        tasks = self.get_all_tasks()
-        for task in tasks:
-            path = task.get('path', '\\')
-            if path:
-                folders.add(path)
-                # Add parent folders
-                parts = path.split('\\')
-                for i in range(1, len(parts)):
-                    parent = '\\'.join(parts[:i+1])
-                    if parent:
-                        folders.add(parent)
+        try:
+            scheduler = self._connect()
+            root = scheduler.GetFolder("\\")
+            folders.add("\\")
+            self._enumerate_folders_recursive(root, folders)
+        except Exception as e:
+            logger.warning("Failed to enumerate task folders: %s", e)
         return sorted(folders)
+
+    def _enumerate_folders_recursive(self, folder: win32com.client.CDispatch, folders: set) -> None:
+        """Recursively collect folder paths."""
+        try:
+            for subfolder in folder.GetFolders(0):
+                folders.add(subfolder.Path)
+                self._enumerate_folders_recursive(subfolder, folders)
+        except Exception:
+            pass
 
 
 _task_scheduler_info: Optional[TaskSchedulerInfo] = None
