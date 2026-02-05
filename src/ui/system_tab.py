@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QScrollArea, QFrame, QSizePolicy
 )
-from PySide6.QtCore import Qt, Slot, QThreadPool
+from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer
 
 from src.services.windows_info import WindowsInfo
 from src.utils.thread_utils import SingleRunWorker
@@ -190,6 +190,23 @@ class SystemTab(QWidget):
         self._loading_label = None
         self.init_ui()
         self._load_system_info()
+
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setInterval(100)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.timeout.connect(self._on_resize_done)
+
+    def resizeEvent(self, event) -> None:
+        """Suppress card repaints during resize drag, batch at end."""
+        if not self._resize_timer.isActive():
+            self._card_container.setUpdatesEnabled(False)
+        self._resize_timer.start()
+        super().resizeEvent(event)
+
+    def _on_resize_done(self) -> None:
+        """Re-enable updates after resize drag ends."""
+        self._card_container.setUpdatesEnabled(True)
+        self._card_container.update()
 
     def init_ui(self):
         """Initialize the user interface."""

@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QScrollArea, QFrame, QSizePolicy
 )
-from PySide6.QtCore import Qt, Slot, QThreadPool
+from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer
 
 from src.ui.theme import Colors
 from src.services.enterprise_info import EnterpriseInfo
@@ -180,6 +180,23 @@ class EnterpriseTab(QWidget):
         self._data_loaded = False  # Track if data has been loaded
         self.init_ui()
         # Don't load data here - will be loaded on first tab activation (lazy loading)
+
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setInterval(100)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.timeout.connect(self._on_resize_done)
+
+    def resizeEvent(self, event) -> None:
+        """Suppress card repaints during resize drag, batch at end."""
+        if not self._resize_timer.isActive():
+            self._card_container.setUpdatesEnabled(False)
+        self._resize_timer.start()
+        super().resizeEvent(event)
+
+    def _on_resize_done(self) -> None:
+        """Re-enable updates after resize drag ends."""
+        self._card_container.setUpdatesEnabled(True)
+        self._card_container.update()
 
     def init_ui(self):
         """Initialize the user interface."""
