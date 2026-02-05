@@ -1,10 +1,15 @@
 """System Tab - Modern card-based system information display."""
 
-import subprocess
+import os
+import winreg
+
 import psutil
 import platform
 import socket
 from typing import Dict, List, Optional
+
+from src.utils.win32.registry import read_string, read_binary, read_qword, enumerate_subkeys
+from src.utils.win32.system_info import is_secure_boot_enabled
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QScrollArea, QFrame, QSizePolicy
@@ -331,10 +336,10 @@ class SystemTab(QWidget):
             info["Computer Name"] = socket.gethostname()
             info["OS"] = f"{platform.system()} {platform.release()}"
             info["Version"] = platform.version()
-            info["Manufacturer"] = self._run_wmic("computersystem", "Manufacturer")
-            info["Model"] = self._run_wmic("computersystem", "Model")
+            info["Manufacturer"] = self._windows_info.get_manufacturer()
+            info["Model"] = self._windows_info.get_model()
             info["Architecture"] = platform.machine()
-            info["Processor"] = self._run_wmic("cpu", "Name")
+            info["Processor"] = self._windows_info.get_processor()
 
             mem = psutil.virtual_memory()
             info["RAM"] = f"{mem.total / (1024**3):.1f} GB"
@@ -369,8 +374,22 @@ class SystemTab(QWidget):
                 stick_gb = [f"{c/(1024**3):.0f}GB" for c in memory_sticks]
                 info["Memory Config"] = f"{len(memory_sticks)} stick(s): {', '.join(stick_gb)}"
 
-            info["BIOS"] = self._run_wmic("bios", "SMBIOSBIOSVersion")
-            info["Baseboard"] = f"{self._run_wmic('baseboard', 'Manufacturer')} {self._run_wmic('baseboard', 'Product')}"
+            info["BIOS"] = read_string(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\BIOS",
+                "BIOSVersion",
+            ) or "Unknown"
+            bb_mfr = read_string(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\BIOS",
+                "BaseBoardManufacturer",
+            ) or "Unknown"
+            bb_prod = read_string(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\BIOS",
+                "BaseBoardProduct",
+            ) or ""
+            info["Baseboard"] = f"{bb_mfr} {bb_prod}".strip()
 
         except Exception as e:
             info["Error"] = str(e)
@@ -380,13 +399,49 @@ class SystemTab(QWidget):
         """Get components information."""
         info = {}
         try:
-            info["Display"] = self._run_wmic("path win32_videocontroller", "Name")
+            # Display adapter from registry
+            display = read_string(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000",
+                "DriverDesc",
+            )
+            info["Display"] = display or "Unknown"
 
-            vram = self._run_wmic("path win32_videocontroller", "AdapterRAM")
-            if vram and vram.isdigit():
-                info["VRAM"] = f"{int(vram) / (1024**3):.1f} GB"
+            # VRAM from registry (try qword first, then binary)
+            vram_bytes = read_qword(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000",
+                "HardwareInformation.qwMemorySize",
+            )
+            if vram_bytes and vram_bytes > 0:
+                info["VRAM"] = f"{vram_bytes / (1024**3):.1f} GB"
+            else:
+                vram_bin = read_binary(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000",
+                    "HardwareInformation.MemorySize",
+                )
+                if vram_bin and len(vram_bin) >= 4:
+                    import struct
+                    vram_val = struct.unpack_from("<Q" if len(vram_bin) >= 8 else "<I", vram_bin)[0]
+                    if vram_val > 0:
+                        info["VRAM"] = f"{vram_val / (1024**3):.1f} GB"
 
-            info["Sound"] = self._run_wmic("sounddev", "Name")
+            # Sound device from registry
+            sound_class = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e96c-e325-11ce-bfc1-08002be10318}"
+            sound_subkeys = enumerate_subkeys(winreg.HKEY_LOCAL_MACHINE, sound_class)
+            sound_name = None
+            for sk in sound_subkeys:
+                if sk.isdigit():
+                    desc = read_string(
+                        winreg.HKEY_LOCAL_MACHINE,
+                        f"{sound_class}\\{sk}",
+                        "DriverDesc",
+                    )
+                    if desc:
+                        sound_name = desc
+                        break
+            info["Sound"] = sound_name or "Unknown"
 
             total_disk = sum(
                 psutil.disk_usage(p.mountpoint).total
@@ -395,7 +450,13 @@ class SystemTab(QWidget):
             )
             info["Storage"] = f"{total_disk / (1024**3):.0f} GB ({len(psutil.disk_partitions())} partitions)"
 
-            info["Optical"] = self._run_wmic("cdrom", "Name") or "None"
+            # Optical drive
+            optical = read_string(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Services\cdrom\Enum",
+                "0",
+            )
+            info["Optical"] = optical or "None"
 
         except Exception as e:
             info["Error"] = str(e)
@@ -405,7 +466,6 @@ class SystemTab(QWidget):
         """Get software environment information."""
         info = {}
         try:
-            import os
             info["User"] = f"{os.environ.get('USERDOMAIN', '')}\\{os.environ.get('USERNAME', '')}"
             info["Processes"] = str(len(psutil.pids()))
 
@@ -429,18 +489,19 @@ class SystemTab(QWidget):
             info["Defender"] = "Running" if self._is_service_running("WinDefend") else "Stopped"
             info["Firewall"] = "Running" if self._is_service_running("mpssvc") else "Stopped"
 
-            try:
-                import winreg
-                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System")
-                uac = winreg.QueryValueEx(key, "EnableLUA")[0]
-                info["UAC"] = "Enabled" if uac else "Disabled"
-                winreg.CloseKey(key)
-            except:
+            from src.utils.win32.registry import read_dword
+            uac_val = read_dword(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System",
+                "EnableLUA",
+            )
+            if uac_val is not None:
+                info["UAC"] = "Enabled" if uac_val else "Disabled"
+            else:
                 info["UAC"] = "Unknown"
 
-            secure_boot = self._run_powershell("Confirm-SecureBootUEFI")
-            info["Secure Boot"] = "Enabled" if "True" in secure_boot else ("Disabled" if "False" in secure_boot else "N/A")
+            sb = is_secure_boot_enabled()
+            info["Secure Boot"] = "Enabled" if sb is True else ("Disabled" if sb is False else "N/A")
 
             info["Windows Update"] = "Running" if self._is_service_running("wuauserv") else "Stopped"
 
@@ -470,7 +531,7 @@ class SystemTab(QWidget):
             info["Hostname"] = socket.gethostname()
             try:
                 info["FQDN"] = socket.getfqdn()
-            except:
+            except Exception:
                 pass
 
             info["Adapters"] = str(len([s for s in stats.values() if s.isup]))
@@ -479,36 +540,12 @@ class SystemTab(QWidget):
             info["Error"] = str(e)
         return info
 
-    def _run_wmic(self, category: str, field: str) -> str:
-        """Run a WMIC command and return the result."""
-        try:
-            cmd = f"wmic {category} get {field}"
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, shell=True)
-            if result.returncode == 0:
-                lines = [l.strip() for l in result.stdout.strip().split('\n') if l.strip()]
-                if len(lines) > 1:
-                    return lines[1]
-        except:
-            pass
-        return "Unknown"
-
-    def _run_powershell(self, command: str) -> str:
-        """Run a PowerShell command and return output."""
-        try:
-            result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", command],
-                capture_output=True, text=True, timeout=5
-            )
-            return result.stdout.strip()
-        except:
-            return ""
-
     def _is_service_running(self, service_name: str) -> bool:
         """Check if a Windows service is running."""
         try:
             service = psutil.win_service_get(service_name)
             return service.status() == 'running'
-        except:
+        except Exception:
             return False
 
     @Slot(object)
