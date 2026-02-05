@@ -1,13 +1,38 @@
 """
 Windows Services Management Service.
 
-Provides functionality to list, query, and control Windows services using WMI.
-Services can be started, stopped, and restarted with proper error handling.
+Provides functionality to list, query, and control Windows services
+using the Win32 Service Control Manager API (win32service).
 """
 
-import subprocess
+import logging
+import time
 from typing import List, Dict, Optional
 from enum import Enum
+
+import win32service
+
+logger = logging.getLogger(__name__)
+
+# Map win32service state constants to status strings
+_STATE_MAP = {
+    win32service.SERVICE_STOPPED: "Stopped",
+    win32service.SERVICE_START_PENDING: "Start Pending",
+    win32service.SERVICE_STOP_PENDING: "Stop Pending",
+    win32service.SERVICE_RUNNING: "Running",
+    win32service.SERVICE_CONTINUE_PENDING: "Continue Pending",
+    win32service.SERVICE_PAUSE_PENDING: "Pause Pending",
+    win32service.SERVICE_PAUSED: "Paused",
+}
+
+# Map win32service start type constants to start mode strings
+_START_TYPE_MAP = {
+    win32service.SERVICE_BOOT_START: "Boot",
+    win32service.SERVICE_SYSTEM_START: "System",
+    win32service.SERVICE_AUTO_START: "Auto",
+    win32service.SERVICE_DEMAND_START: "Demand",
+    win32service.SERVICE_DISABLED: "Disabled",
+}
 
 
 class ServiceStatus(Enum):
@@ -33,77 +58,79 @@ class ServiceStartMode(Enum):
 
 
 class ServiceInfo:
-    """Manage and retrieve Windows services information."""
+    """Manage and retrieve Windows services information via Win32 SCM API."""
 
     def __init__(self):
         """Initialize the service."""
         pass
 
     def get_all_services(self) -> List[Dict[str, str]]:
-        """
-        Get list of all Windows services.
+        """Get list of all Windows services.
 
         Returns:
             List of dicts with keys: Name, DisplayName, Status, StartMode, PathName, Description
-            Returns empty list if query fails.
         """
         services = []
-
         try:
-            # Query all services using wmic with specific fields
-            result = subprocess.run(
-                [
-                    'wmic',
-                    'service',
-                    'get',
-                    'name,displayname,state,startmode,pathname,description',
-                    '/format:list'
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30
+            scm = win32service.OpenSCManager(
+                None, None, win32service.SC_MANAGER_ENUMERATE_SERVICE
             )
+            try:
+                # EnumServicesStatusEx returns list of dicts with keys:
+                # ServiceName, DisplayName, ServiceType, CurrentState, etc.
+                svc_list = win32service.EnumServicesStatusEx(
+                    scm,
+                    win32service.SERVICE_WIN32,
+                    win32service.SERVICE_STATE_ALL,
+                    None,  # group name
+                )
+                for svc_info in svc_list:
+                    svc_name = svc_info["ServiceName"]
+                    display_name = svc_info["DisplayName"]
+                    state = svc_info["CurrentState"]
+                    status_str = _STATE_MAP.get(state, "Unknown")
 
-            if result.returncode != 0:
-                return []
+                    # Get config for start mode, path, description
+                    start_mode = "Unknown"
+                    path_name = ""
+                    description = ""
+                    try:
+                        svc_handle = win32service.OpenService(
+                            scm, svc_name, win32service.SERVICE_QUERY_CONFIG
+                        )
+                        try:
+                            config = win32service.QueryServiceConfig(svc_handle)
+                            # config is tuple: (svc_type, start_type, error_control, binary_path, load_order, tag_id, deps, svc_start_name, display_name)
+                            start_mode = _START_TYPE_MAP.get(config[1], "Unknown")
+                            path_name = config[3] or ""
+                            try:
+                                desc = win32service.QueryServiceConfig2(
+                                    svc_handle, win32service.SERVICE_CONFIG_DESCRIPTION
+                                )
+                                description = desc or ""
+                            except Exception:
+                                pass
+                        finally:
+                            win32service.CloseServiceHandle(svc_handle)
+                    except Exception:
+                        pass
 
-            # Parse output format: Key=Value pairs with blank lines between services
-            # wmic outputs blank lines between each property and multiple blanks between records
-            current_service = {}
-            blank_count = 0
-
-            for line in result.stdout.split('\n'):
-                line_stripped = line.strip()
-
-                if not line_stripped:
-                    blank_count += 1
-                    # If we have 2+ consecutive blank lines and collected a service, save it
-                    if blank_count >= 2 and current_service and 'Name' in current_service:
-                        services.append(self._normalize_service(current_service))
-                        current_service = {}
-                else:
-                    blank_count = 0
-                    # Parse key=value
-                    if '=' in line_stripped:
-                        key, value = line_stripped.split('=', 1)
-                        current_service[key.strip()] = value.strip()
-
-            # Don't forget the last service
-            if current_service and 'Name' in current_service:
-                services.append(self._normalize_service(current_service))
-
-        except subprocess.TimeoutExpired:
-            # Timeout getting services
-            pass
-        except Exception:
-            # Other errors - return empty list
-            pass
-
+                    services.append({
+                        "Name": svc_name,
+                        "DisplayName": display_name or svc_name,
+                        "Status": status_str,
+                        "StartMode": start_mode,
+                        "PathName": path_name,
+                        "Description": description,
+                    })
+            finally:
+                win32service.CloseServiceHandle(scm)
+        except Exception as e:
+            logger.warning("Failed to enumerate services: %s", e)
         return services
 
     def get_service_info(self, name: str) -> Optional[Dict[str, str]]:
-        """
-        Get detailed information about a specific service.
+        """Get detailed information about a specific service.
 
         Args:
             name: Service name (e.g., "Spooler", "wuauserv")
@@ -112,142 +139,121 @@ class ServiceInfo:
             Dict with service details, or None if service not found
         """
         try:
-            # Query specific service (note: wmic where clause uses single quotes)
-            result = subprocess.run(
-                [
-                    'wmic',
-                    'service',
-                    'where',
-                    f"name='{name}'",
-                    'get',
-                    'name,displayname,state,startmode,pathname,description',
-                    '/format:list'
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
+            scm = win32service.OpenSCManager(None, None, win32service.SC_MANAGER_CONNECT)
+            try:
+                svc_handle = win32service.OpenService(
+                    scm, name,
+                    win32service.SERVICE_QUERY_STATUS | win32service.SERVICE_QUERY_CONFIG
+                )
+                try:
+                    # Get status
+                    status = win32service.QueryServiceStatusEx(svc_handle)
+                    state = status["CurrentState"]
+                    status_str = _STATE_MAP.get(state, "Unknown")
 
-            if result.returncode != 0:
-                return None
+                    # Get config
+                    config = win32service.QueryServiceConfig(svc_handle)
+                    start_mode = _START_TYPE_MAP.get(config[1], "Unknown")
+                    path_name = config[3] or ""
+                    display_name = config[8] or name
 
-            # Parse output
-            service_data = {}
-            for line in result.stdout.split('\n'):
-                line_stripped = line.strip()
-                if '=' in line_stripped:
-                    key, value = line_stripped.split('=', 1)
-                    service_data[key.strip()] = value.strip()
+                    # Get description
+                    description = ""
+                    try:
+                        desc = win32service.QueryServiceConfig2(
+                            svc_handle, win32service.SERVICE_CONFIG_DESCRIPTION
+                        )
+                        description = desc or ""
+                    except Exception:
+                        pass
 
-            if not service_data or 'Name' not in service_data:
-                return None
-
-            return self._normalize_service(service_data)
-
-        except subprocess.TimeoutExpired:
-            return None
+                    return {
+                        "Name": name,
+                        "DisplayName": display_name,
+                        "Status": status_str,
+                        "StartMode": start_mode,
+                        "PathName": path_name,
+                        "Description": description,
+                    }
+                finally:
+                    win32service.CloseServiceHandle(svc_handle)
+            finally:
+                win32service.CloseServiceHandle(scm)
         except Exception:
             return None
 
     def start_service(self, name: str) -> bool:
-        """
-        Start a Windows service.
+        """Start a Windows service.
 
         Args:
             name: Service name (e.g., "Spooler")
 
         Returns:
-            True if command executed successfully, False otherwise
+            True if service started successfully, False otherwise
         """
         try:
-            result = subprocess.run(
-                ['net', 'start', name],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            # net start returns 0 on success or if service already running
-            return result.returncode in (0, 2)
-        except Exception:
+            scm = win32service.OpenSCManager(None, None, win32service.SC_MANAGER_CONNECT)
+            try:
+                svc_handle = win32service.OpenService(
+                    scm, name, win32service.SERVICE_START | win32service.SERVICE_QUERY_STATUS
+                )
+                try:
+                    # Check if already running
+                    status = win32service.QueryServiceStatusEx(svc_handle)
+                    if status["CurrentState"] == win32service.SERVICE_RUNNING:
+                        return True
+                    win32service.StartService(svc_handle, None)
+                    return True
+                finally:
+                    win32service.CloseServiceHandle(svc_handle)
+            finally:
+                win32service.CloseServiceHandle(scm)
+        except Exception as e:
+            logger.warning("Failed to start service '%s': %s", name, e)
             return False
 
     def stop_service(self, name: str) -> bool:
-        """
-        Stop a Windows service.
+        """Stop a Windows service.
 
         Args:
             name: Service name (e.g., "Spooler")
 
         Returns:
-            True if command executed successfully, False otherwise
+            True if service stopped successfully, False otherwise
         """
         try:
-            result = subprocess.run(
-                ['net', 'stop', name],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            # net stop returns 0 on success or if service already stopped
-            return result.returncode in (0, 2)
-        except Exception:
+            scm = win32service.OpenSCManager(None, None, win32service.SC_MANAGER_CONNECT)
+            try:
+                svc_handle = win32service.OpenService(
+                    scm, name, win32service.SERVICE_STOP | win32service.SERVICE_QUERY_STATUS
+                )
+                try:
+                    status = win32service.QueryServiceStatusEx(svc_handle)
+                    if status["CurrentState"] == win32service.SERVICE_STOPPED:
+                        return True
+                    win32service.ControlService(svc_handle, win32service.SERVICE_CONTROL_STOP)
+                    return True
+                finally:
+                    win32service.CloseServiceHandle(svc_handle)
+            finally:
+                win32service.CloseServiceHandle(scm)
+        except Exception as e:
+            logger.warning("Failed to stop service '%s': %s", name, e)
             return False
 
     def restart_service(self, name: str) -> bool:
-        """
-        Restart a Windows service.
+        """Restart a Windows service.
 
         Args:
             name: Service name (e.g., "Spooler")
 
         Returns:
-            True if both stop and start commands executed successfully
+            True if both stop and start succeeded
         """
-        try:
-            # Stop the service
-            stop_result = subprocess.run(
-                ['net', 'stop', name],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-
-            # Start the service
-            start_result = subprocess.run(
-                ['net', 'start', name],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-
-            # Consider success if both commands completed (even if already stopped/running)
-            return stop_result.returncode in (0, 2) and start_result.returncode in (0, 2)
-
-        except Exception:
-            return False
-
-    def _normalize_service(self, service_data: Dict[str, str]) -> Dict[str, str]:
-        """
-        Normalize service data to standard format.
-
-        Args:
-            service_data: Raw service data from wmic
-
-        Returns:
-            Normalized service dict with standard keys
-        """
-        # Note: wmic uses 'State' for current status, 'StartMode' for start type
-        status = service_data.get('State', service_data.get('Status', 'Unknown'))
-        start_mode = service_data.get('StartMode', 'Unknown')
-
-        return {
-            "Name": service_data.get('Name', ''),
-            "DisplayName": service_data.get('DisplayName', service_data.get('Name', '')),
-            "Status": status if status else 'Unknown',
-            "StartMode": start_mode if start_mode else 'Unknown',
-            "PathName": service_data.get('PathName', service_data.get('Pathname', '')),
-            "Description": service_data.get('Description', ''),
-        }
+        stopped = self.stop_service(name)
+        if stopped:
+            time.sleep(0.5)
+        return self.start_service(name)
 
 
 # Global instances
