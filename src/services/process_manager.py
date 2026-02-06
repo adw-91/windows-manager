@@ -11,6 +11,7 @@ class ProcessManager:
     def __init__(self):
         self._process_cache: Dict[int, psutil.Process] = {}
         self._cpu_cache: Dict[int, float] = {}
+        self._info_cache: Dict[int, Dict[str, Any]] = {}  # name, memory_mb, status
         self._lock = Lock()
         self._initialized = False
         self._cpu_count = psutil.cpu_count() or 1
@@ -55,11 +56,20 @@ class ProcessManager:
 
                     cpu_percent = self._cpu_cache.get(pid, 0.0)
 
+                    mem_mb = pinfo['memory_info'].rss / (1024**2) if pinfo['memory_info'] else 0
+
+                    # Cache info for fast updates
+                    self._info_cache[pid] = {
+                        "name": pinfo['name'] or "",
+                        "memory_mb": mem_mb,
+                        "status": pinfo['status'] or "",
+                    }
+
                 processes.append({
                     "pid": pid,
                     "name": pinfo['name'],
                     "cpu_percent": cpu_percent,
-                    "memory_mb": pinfo['memory_info'].rss / (1024**2) if pinfo['memory_info'] else 0,
+                    "memory_mb": mem_mb,
                     "status": pinfo['status'],
                 })
             except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -71,8 +81,46 @@ class ProcessManager:
             for pid in dead_pids:
                 self._process_cache.pop(pid, None)
                 self._cpu_cache.pop(pid, None)
+                self._info_cache.pop(pid, None)
 
         self._initialized = True
+        return processes
+
+    def get_fast_update(self) -> List[Dict[str, Any]]:
+        """Fast refresh: only update CPU% using cached Process objects.
+
+        Uses cached name/memory/status from the last full refresh.
+        Only calls proc.cpu_percent() which is non-blocking.
+        Typically completes in <100ms even with 400+ processes.
+        """
+        if not self._initialized:
+            return []
+
+        processes = []
+        with self._lock:
+            dead_pids = set()
+            for pid, proc in self._process_cache.items():
+                try:
+                    cpu = proc.cpu_percent()
+                    normalized = min(cpu / self._cpu_count, 100.0) if cpu else 0.0
+                    self._cpu_cache[pid] = normalized
+
+                    info = self._info_cache.get(pid, {})
+                    processes.append({
+                        "pid": pid,
+                        "name": info.get("name", ""),
+                        "cpu_percent": normalized,
+                        "memory_mb": info.get("memory_mb", 0),
+                        "status": info.get("status", ""),
+                    })
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    dead_pids.add(pid)
+
+            for pid in dead_pids:
+                self._process_cache.pop(pid, None)
+                self._cpu_cache.pop(pid, None)
+                self._info_cache.pop(pid, None)
+
         return processes
 
     def get_process_info(self, pid: int) -> Optional[Dict[str, Any]]:

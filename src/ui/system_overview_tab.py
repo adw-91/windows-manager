@@ -479,7 +479,7 @@ class SystemOverviewTab(QWidget):
 
         # Details worker (slower updates for detailed info)
         details_worker = LoopingWorker(
-            2000,  # 2 seconds
+            5000,  # 5 seconds — handle/thread counting is slow with EDR
             self._collect_details,
         )
         details_worker.signals.result.connect(self._update_details)
@@ -542,20 +542,26 @@ class SystemOverviewTab(QWidget):
 
         pids = psutil.pids()
         process_count = len(pids)
+
+        # Sample 20 processes for thread/handle estimates.
+        # num_handles() is very slow on enterprise machines with EDR (~22ms/proc).
+        sample_size = min(20, len(pids))
         thread_count = 0
         handle_count = 0
-        for pid in pids[:100]:
+        sampled = 0
+        for pid in pids[:sample_size]:
             try:
                 proc = psutil.Process(pid)
                 thread_count += proc.num_threads()
                 if hasattr(proc, 'num_handles'):
                     handle_count += proc.num_handles()
+                sampled += 1
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
 
-        if len(pids) > 100:
-            thread_count = int(thread_count * len(pids) / 100)
-            handle_count = int(handle_count * len(pids) / 100)
+        if sampled > 0 and len(pids) > sample_size:
+            thread_count = int(thread_count * len(pids) / sampled)
+            handle_count = int(handle_count * len(pids) / sampled)
 
         mem = psutil.virtual_memory()
         swap = psutil.swap_memory()

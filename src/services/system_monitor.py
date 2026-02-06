@@ -9,10 +9,12 @@ class SystemMonitor:
 
     def __init__(self):
         self.update_interval = 1000  # milliseconds
+        # Prime cpu_percent so first interval=None call returns real data
+        psutil.cpu_percent(interval=None)
 
     def get_cpu_usage(self) -> float:
         """Get current CPU usage percentage"""
-        return psutil.cpu_percent(interval=0.1)
+        return psutil.cpu_percent(interval=None)
 
     def get_memory_info(self) -> Dict[str, float]:
         """Get memory usage information"""

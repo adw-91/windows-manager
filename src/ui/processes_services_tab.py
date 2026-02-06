@@ -34,15 +34,17 @@ class ProcessesServicesTab(QWidget):
     COL_MEMORY = 3
     COL_STATUS = 4
 
-    # Auto-refresh interval
-    REFRESH_INTERVAL_MS = 2000
+    # Auto-refresh intervals
+    FAST_REFRESH_MS = 3000    # CPU-only update every 3s
+    FULL_REFRESH_MS = 15000   # Full process enumeration every 15s
 
     def __init__(self) -> None:
         super().__init__()
         self._process_manager = get_process_manager()
         self._all_processes: List[Dict] = []
         self._filtered_processes: List[Dict] = []
-        self._refresh_worker: Optional[LoopingWorker] = None
+        self._fast_refresh_worker: Optional[LoopingWorker] = None
+        self._full_refresh_worker: Optional[LoopingWorker] = None
         self._sort_paused = False  # Ctrl key pauses sorting/reordering
         self._last_sort_column = self.COL_CPU  # Default sort by CPU
         self._last_sort_order = Qt.SortOrder.DescendingOrder
@@ -355,8 +357,7 @@ class ProcessesServicesTab(QWidget):
         worker.signals.result.connect(self._on_processes_loaded)
         worker.signals.error.connect(self._on_load_error)
         QThreadPool.globalInstance().start(worker)
-        # Start auto-refresh immediately
-        self._on_auto_refresh_toggled(Qt.CheckState.Checked)
+        self._start_auto_refresh()
 
     @Slot(list)
     def _on_processes_loaded(self, processes: List[Dict]) -> None:
@@ -389,11 +390,9 @@ class ProcessesServicesTab(QWidget):
         self._populate_table()
 
     def _populate_table(self) -> None:
-        """Populate table with filtered process data."""
-        # Check if Ctrl is pressed (pause sorting)
+        """Populate table with filtered process data, reusing existing items."""
         ctrl_pressed = self._check_ctrl_state()
 
-        # Update status label
         if ctrl_pressed:
             self._sort_status_label.setText("⏸ Sorting paused (release Ctrl to resume)")
         else:
@@ -408,7 +407,7 @@ class ProcessesServicesTab(QWidget):
             if pid_item:
                 selected_pid = pid_item.text()
 
-        # Store current scroll position and row order if Ctrl is pressed
+        # Store current row order if Ctrl is pressed
         current_order = []
         if ctrl_pressed:
             for row in range(self._process_table.rowCount()):
@@ -417,50 +416,55 @@ class ProcessesServicesTab(QWidget):
                     current_order.append(pid_item.data(Qt.ItemDataRole.UserRole))
 
         self._process_table.setSortingEnabled(False)
-        self._process_table.setRowCount(len(self._filtered_processes))
-
-        # Create a map for quick lookup if Ctrl is pressed
-        proc_by_pid = {proc.get("pid"): proc for proc in self._filtered_processes}
 
         # Determine row order
+        proc_by_pid = {proc.get("pid"): proc for proc in self._filtered_processes}
+
         if ctrl_pressed and current_order:
-            # Maintain current order, add new processes at end
             ordered_procs = []
             seen_pids = set()
             for pid in current_order:
                 if pid in proc_by_pid:
                     ordered_procs.append(proc_by_pid[pid])
                     seen_pids.add(pid)
-            # Add any new processes
             for proc in self._filtered_processes:
                 if proc.get("pid") not in seen_pids:
                     ordered_procs.append(proc)
         else:
             ordered_procs = self._filtered_processes
 
+        # Adjust row count
+        new_count = len(ordered_procs)
+        self._process_table.setRowCount(new_count)
+
         for row, proc in enumerate(ordered_procs):
-            # PID - use custom item for numeric sorting
-            pid_item = QTableWidgetItem()
+            # PID — reuse existing item or create new
+            pid_item = self._process_table.item(row, self.COL_PID)
+            if pid_item is None:
+                pid_item = QTableWidgetItem()
+                self._process_table.setItem(row, self.COL_PID, pid_item)
             pid_item.setData(Qt.ItemDataRole.DisplayRole, str(proc.get("pid", "")))
             pid_item.setData(Qt.ItemDataRole.UserRole, proc.get("pid", 0))
-            self._process_table.setItem(row, self.COL_PID, pid_item)
 
             # Name
-            name_item = QTableWidgetItem(proc.get("name", ""))
-            self._process_table.setItem(row, self.COL_NAME, name_item)
+            name_item = self._process_table.item(row, self.COL_NAME)
+            if name_item is None:
+                name_item = QTableWidgetItem()
+                self._process_table.setItem(row, self.COL_NAME, name_item)
+            name_item.setText(proc.get("name", ""))
 
-            # CPU % - cap at 100% per core (logical processors)
-            cpu_val = proc.get('cpu_percent', 0)
-            # Cap CPU at reasonable max (100% total system)
-            cpu_val = min(cpu_val, 100.0)
-            cpu_item = QTableWidgetItem()
+            # CPU %
+            cpu_val = min(proc.get('cpu_percent', 0), 100.0)
+            cpu_item = self._process_table.item(row, self.COL_CPU)
+            if cpu_item is None:
+                cpu_item = QTableWidgetItem()
+                self._process_table.setItem(row, self.COL_CPU, cpu_item)
             cpu_item.setData(Qt.ItemDataRole.DisplayRole, f"{cpu_val:.1f}%")
             cpu_item.setData(Qt.ItemDataRole.UserRole, cpu_val)
 
-            # Color CPU - System Idle Process uses inverted colors
+            # CPU coloring
             proc_name = proc.get("name", "")
             if proc_name == "System Idle Process":
-                # High idle = good (green), low idle = bad (system busy)
                 if cpu_val > 80:
                     cpu_item.setForeground(Colors.SUCCESS)
                 elif cpu_val > 50:
@@ -470,39 +474,46 @@ class ProcessesServicesTab(QWidget):
                 else:
                     cpu_item.setForeground(Colors.ERROR)
             else:
-                # Normal processes - high CPU = concerning
                 if cpu_val > 50:
                     cpu_item.setForeground(Colors.ERROR)
                 elif cpu_val > 20:
                     cpu_item.setForeground(Colors.WARNING)
-            self._process_table.setItem(row, self.COL_CPU, cpu_item)
+                else:
+                    cpu_item.setForeground(Colors.TEXT_PRIMARY)
 
-            # Memory (MB) - use custom item for numeric sorting
+            # Memory
             mem_val = proc.get('memory_mb', 0)
-            memory_item = QTableWidgetItem()
+            memory_item = self._process_table.item(row, self.COL_MEMORY)
+            if memory_item is None:
+                memory_item = QTableWidgetItem()
+                self._process_table.setItem(row, self.COL_MEMORY, memory_item)
             memory_item.setData(Qt.ItemDataRole.DisplayRole, f"{mem_val:.1f}")
             memory_item.setData(Qt.ItemDataRole.UserRole, mem_val)
-            # Color high memory processes (> 500 MB)
             if mem_val > 1000:
                 memory_item.setForeground(Colors.ERROR)
             elif mem_val > 500:
                 memory_item.setForeground(Colors.WARNING)
-            self._process_table.setItem(row, self.COL_MEMORY, memory_item)
+            else:
+                memory_item.setForeground(Colors.TEXT_PRIMARY)
 
-            # Status with RAG coloring
+            # Status
             status = proc.get("status", "")
-            status_item = QTableWidgetItem(status)
+            status_item = self._process_table.item(row, self.COL_STATUS)
+            if status_item is None:
+                status_item = QTableWidgetItem()
+                self._process_table.setItem(row, self.COL_STATUS, status_item)
+            status_item.setText(status)
             if status == "running":
                 status_item.setForeground(Colors.SUCCESS)
             elif status in ("zombie", "dead"):
                 status_item.setForeground(Colors.ERROR)
             elif status in ("stopped", "sleeping"):
                 status_item.setForeground(Colors.TEXT_SECONDARY)
-            self._process_table.setItem(row, self.COL_STATUS, status_item)
+            else:
+                status_item.setForeground(Colors.TEXT_PRIMARY)
 
         self._process_table.setSortingEnabled(True)
 
-        # Only apply sort if Ctrl is NOT pressed
         if not ctrl_pressed and self._last_sort_column is not None:
             self._process_table.sortItems(self._last_sort_column, self._last_sort_order)
 
@@ -542,22 +553,42 @@ class ProcessesServicesTab(QWidget):
         worker.signals.error.connect(self._on_load_error)
         QThreadPool.globalInstance().start(worker)
 
+    def _start_auto_refresh(self) -> None:
+        """Start dual refresh workers: fast (CPU-only) + slow (full enum)."""
+        if self._fast_refresh_worker is None:
+            self._fast_refresh_worker = LoopingWorker(
+                self.FAST_REFRESH_MS,
+                self._process_manager.get_fast_update,
+            )
+            self._fast_refresh_worker.signals.result.connect(self._on_processes_loaded)
+            self._fast_refresh_worker.signals.error.connect(self._on_load_error)
+            self._fast_refresh_worker.start()
+
+        if self._full_refresh_worker is None:
+            self._full_refresh_worker = LoopingWorker(
+                self.FULL_REFRESH_MS,
+                self._process_manager.get_all_processes,
+            )
+            self._full_refresh_worker.signals.result.connect(self._on_processes_loaded)
+            self._full_refresh_worker.signals.error.connect(self._on_load_error)
+            self._full_refresh_worker.start()
+
+    def _stop_auto_refresh(self) -> None:
+        """Stop both refresh workers."""
+        if self._fast_refresh_worker is not None:
+            self._fast_refresh_worker.stop()
+            self._fast_refresh_worker = None
+        if self._full_refresh_worker is not None:
+            self._full_refresh_worker.stop()
+            self._full_refresh_worker = None
+
     @Slot(int)
     def _on_auto_refresh_toggled(self, state: int) -> None:
         """Handle auto-refresh checkbox toggle."""
         if state == Qt.CheckState.Checked:
-            if self._refresh_worker is None:
-                self._refresh_worker = LoopingWorker(
-                    self.REFRESH_INTERVAL_MS,
-                    self._process_manager.get_all_processes
-                )
-                self._refresh_worker.signals.result.connect(self._on_processes_loaded)
-                self._refresh_worker.signals.error.connect(self._on_load_error)
-                self._refresh_worker.start()
+            self._start_auto_refresh()
         else:
-            if self._refresh_worker is not None:
-                self._refresh_worker.stop()
-                self._refresh_worker = None
+            self._stop_auto_refresh()
 
     @Slot()
     def _on_end_task_clicked(self) -> None:
@@ -845,9 +876,7 @@ class ProcessesServicesTab(QWidget):
 
     def closeEvent(self, event) -> None:
         """Clean up workers when tab is closed."""
-        if self._refresh_worker is not None:
-            self._refresh_worker.stop()
-            self._refresh_worker = None
+        self._stop_auto_refresh()
         event.accept()
 
     def refresh(self) -> None:

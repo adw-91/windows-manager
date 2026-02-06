@@ -261,10 +261,6 @@ class ExpandableMetricTile(QFrame):
         self._animating = True  # Suppress graph updates during animation
         self._expand_indicator.setText("▲")
 
-        # Create graph on first expansion
-        if not self._graph_created:
-            self._create_graph()
-
         self._expanded_container.setVisible(True)
         self._subtitle_label.setVisible(True)  # Show subtitle when expanded
 
@@ -276,6 +272,11 @@ class ExpandableMetricTile(QFrame):
         self._animation.setStartValue(self.height())
         self._animation.setEndValue(target_height)
         self._animation.start()
+
+        # Defer graph creation to after the event loop processes the animation.
+        # This prevents UI freeze on iGPU where PlotWidget creation is slow.
+        if not self._graph_created:
+            QTimer.singleShot(50, self._create_graph)
 
         # Allow graph updates after animation completes (200ms)
         QTimer.singleShot(250, self._on_expand_animation_done)
