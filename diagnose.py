@@ -2,16 +2,15 @@
 
 Run on the slow machine:
     python diagnose.py
+
+Tests both static creation and continuous graph updates to
+reproduce the real app's behavior.
 """
 
 import time
 import os
-
-# Force software OpenGL BEFORE any Qt/pyqtgraph imports
-# Uncomment one at a time to test which helps:
-# os.environ["QT_OPENGL"] = "software"          # Test A: Mesa software OpenGL
-# os.environ["QSG_RHI_BACKEND"] = "sw"           # Test B: Software RHI backend
-# os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"       # Test C: Force Mesa on Linux (no-op on Windows usually)
+import sys
+import random
 
 times = {}
 
@@ -23,124 +22,220 @@ def mark(label: str) -> None:
 times["__start"] = time.perf_counter()
 mark("Script start")
 
-# Phase 1: Python imports (no Qt yet)
-import sys
-mark("stdlib imports")
-
+# Phase 1: Imports
 import numpy as np
 mark("numpy import")
 
 import psutil
 mark("psutil import")
 
-# Phase 2: Qt imports
-from PySide6.QtWidgets import QApplication
-mark("PySide6.QtWidgets import")
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QVBoxLayout, QWidget,
+    QScrollArea, QFrame, QLabel, QProgressBar, QStackedWidget,
+)
+from PySide6.QtCore import Qt, QTimer
+mark("PySide6 import")
 
-from PySide6.QtCore import Qt
-mark("PySide6.QtCore import")
-
-# Phase 3: pyqtgraph (known to probe GPU)
 import pyqtgraph as pg
-mark("pyqtgraph import")
-
 pg.setConfigOptions(antialias=False, useOpenGL=False)
-mark("pyqtgraph setConfigOptions")
+mark("pyqtgraph import + config")
 
-# Phase 4: Create QApplication
+# Phase 2: Create app
 app = QApplication(sys.argv)
 mark("QApplication created")
 
-# Phase 5: Create a minimal PlotWidget (graph)
-print("\n--- Creating first PlotWidget (this is where freeze happens) ---")
-widget = pg.PlotWidget()
-mark("PlotWidget created")
-
-widget.plot([1, 2, 3, 4, 5], [1, 4, 9, 16, 25])
-mark("PlotWidget.plot() called")
-
-widget.show()
-mark("PlotWidget.show() called")
-
-# Process events to force render
+# ===================================================================
+# TEST 1: Static PlotWidget (baseline)
+# ===================================================================
+print("\n--- TEST 1: Single static PlotWidget ---")
+w1 = pg.PlotWidget()
+w1.plot([1, 2, 3, 4, 5], [1, 4, 9, 16, 25])
+w1.show()
 app.processEvents()
-mark("First processEvents (render)")
+mark("Static PlotWidget created + rendered")
+w1.close()
 
+# ===================================================================
+# TEST 2: Simulates real app - 4 PlotWidgets with continuous updates
+#          inside a nested layout (like ExpandableMetricTile in ScrollArea)
+# ===================================================================
+print("\n--- TEST 2: 4 graphs with 500ms continuous updates (10s test) ---")
+
+class FakeMetricTile(QFrame):
+    """Simulates ExpandableMetricTile with an embedded graph."""
+    def __init__(self, title: str):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(title))
+        layout.addWidget(QProgressBar())
+
+        self.graph = pg.PlotWidget()
+        self.graph.setMinimumHeight(150)
+        self.graph.setMaximumHeight(150)
+        self.graph.setXRange(0, 59, padding=0)
+        self.graph.setYRange(0, 100, padding=0.05)
+        self.graph.setMouseEnabled(x=False, y=False)
+        self.graph.showGrid(x=True, y=True, alpha=0.2)
+
+        # Multiple series like the real CPU tile
+        self.curves = []
+        self.buffers = []
+        colors = ["#4fc3f7", "#81c784", "#ffb74d", "#e57373"]
+        for i, color in enumerate(colors):
+            curve = self.graph.plot(pen=pg.mkPen(color=color, width=2), clipToView=True)
+            self.curves.append(curve)
+            self.buffers.append(np.zeros(60))
+
+        self.head = 0
+        layout.addWidget(self.graph)
+
+    def update_data(self):
+        """Simulate a graph data update (like the real 500ms worker)."""
+        for i, (curve, buf) in enumerate(zip(self.curves, self.buffers)):
+            buf[self.head] = random.uniform(10 + i * 20, 30 + i * 20)
+            # Reorder buffer for display (like RingBuffer.get_data)
+            ordered = np.concatenate([buf[self.head + 1:], buf[:self.head + 1]])
+            x = np.arange(60)
+            curve.setData(x, ordered)
+        self.head = (self.head + 1) % 60
+
+
+# Build a window structure similar to the real app
+window = QMainWindow()
+window.resize(1000, 700)
+
+central = QWidget()
+window.setCentralWidget(central)
+main_layout = QVBoxLayout(central)
+
+# Stacked widget (like the real app)
+stack = QStackedWidget()
+
+# Scroll area containing tiles (like SystemOverviewTab)
+scroll = QScrollArea()
+scroll.setWidgetResizable(True)
+scroll_content = QWidget()
+scroll_layout = QVBoxLayout(scroll_content)
+
+tiles = []
+for name in ["CPU Usage", "Memory", "Disk Activity", "Network"]:
+    tile = FakeMetricTile(name)
+    tiles.append(tile)
+    scroll_layout.addWidget(tile)
+
+scroll_layout.addStretch()
+scroll.setWidget(scroll_content)
+stack.addWidget(scroll)
+# Add empty pages like real app's other tabs
+for _ in range(5):
+    stack.addWidget(QWidget())
+
+main_layout.addWidget(stack)
+
+mark("Test window built (4 tiles, 4 series each)")
+
+window.show()
 app.processEvents()
-mark("Second processEvents")
+mark("Test window shown + first render")
 
-# Phase 6: Test COM/WMI (new Phase 9 code)
-print("\n--- Testing COM/WMI ---")
-try:
-    import pythoncom
-    mark("pythoncom import")
+# Run continuous updates for 10 seconds, measuring each frame
+update_count = 0
+frame_times = []
+slow_frames = 0
+test_start = time.perf_counter()
 
-    pythoncom.CoInitialize()
-    mark("CoInitialize()")
+print("  Running 10 seconds of continuous 500ms updates...")
+print("  (Each update: 4 tiles x 4 series = 16 curve.setData calls)")
 
-    import win32com.client
-    mark("win32com.client import")
+while time.perf_counter() - test_start < 10.0:
+    frame_start = time.perf_counter()
 
-    locator = win32com.client.Dispatch("WbemScripting.SWbemLocator")
-    mark("WMI SWbemLocator created")
+    # Update all tiles (simulates the graph worker signal delivery)
+    for tile in tiles:
+        tile.update_data()
 
-    svc = locator.ConnectServer(".", "root\\cimv2")
-    mark("WMI ConnectServer (root\\cimv2)")
+    # Process events (simulates the main thread doing its work)
+    app.processEvents()
 
-    results = svc.ExecQuery("SELECT Name FROM Win32_OperatingSystem")
-    for r in results:
-        print(f"    OS: {r.Name}")
-    mark("WMI query completed")
-except Exception as e:
-    mark(f"COM/WMI error: {e}")
+    frame_end = time.perf_counter()
+    frame_ms = (frame_end - frame_start) * 1000
+    frame_times.append(frame_ms)
+    if frame_ms > 100:
+        slow_frames += 1
+    update_count += 1
 
-# Phase 7: Test win32service
-print("\n--- Testing win32service ---")
-try:
-    import win32service
-    mark("win32service import")
+    # Wait remainder of 500ms interval
+    elapsed_ms = (frame_end - frame_start) * 1000
+    sleep_ms = max(0, 500 - elapsed_ms)
+    if sleep_ms > 0:
+        time.sleep(sleep_ms / 1000)
 
-    scm = win32service.OpenSCManager(None, None, win32service.SC_MANAGER_ENUMERATE_SERVICE)
-    mark("OpenSCManager")
+mark(f"Continuous update test complete ({update_count} frames)")
 
-    services = win32service.EnumServicesStatusEx(scm, win32service.SERVICE_WIN32)
-    mark(f"EnumServicesStatusEx ({len(services)} services)")
+# ===================================================================
+# TEST 3: Same but with only 1 tile visible (like real app behavior)
+# ===================================================================
+print("\n--- TEST 3: Only 1 tile updating (simulates expanded-only) ---")
 
-    win32service.CloseServiceHandle(scm)
-except Exception as e:
-    mark(f"win32service error: {e}")
+frame_times_single = []
+test_start = time.perf_counter()
+while time.perf_counter() - test_start < 5.0:
+    frame_start = time.perf_counter()
+    tiles[0].update_data()  # Only update one tile
+    app.processEvents()
+    frame_ms = (time.perf_counter() - frame_start) * 1000
+    frame_times_single.append(frame_ms)
+    time.sleep(max(0, (500 - frame_ms) / 1000))
 
-# Summary
+mark("Single-tile update test complete")
+
+# ===================================================================
+# RESULTS
+# ===================================================================
 print("\n" + "=" * 60)
-print("SUMMARY")
+print("RESULTS")
 print("=" * 60)
+
 total = time.perf_counter() - times["__start"]
-print(f"Total time: {total:.2f}s")
-print()
+print(f"Total time: {total:.1f}s\n")
 
-# Identify slow steps (>1s)
-prev_time = times["__start"]
-sorted_times = sorted(times.items(), key=lambda x: x[1])
-print("Slow steps (>1s):")
-found_slow = False
-for i in range(1, len(sorted_times)):
-    label = sorted_times[i][0]
-    delta = sorted_times[i][1] - sorted_times[i - 1][1]
-    if delta > 1.0:
-        print(f"  {delta:7.2f}s  {label}")
-        found_slow = True
-if not found_slow:
-    print("  (none)")
+if frame_times:
+    avg = sum(frame_times) / len(frame_times)
+    worst = max(frame_times)
+    p95 = sorted(frame_times)[int(len(frame_times) * 0.95)]
+    print("TEST 2 - All 4 tiles updating (16 setData calls per frame):")
+    print(f"  Frames:     {len(frame_times)}")
+    print(f"  Avg frame:  {avg:.1f}ms")
+    print(f"  P95 frame:  {p95:.1f}ms")
+    print(f"  Worst frame: {worst:.1f}ms")
+    print(f"  Slow frames (>100ms): {slow_frames}")
+    if worst > 500:
+        print(f"  ** WARNING: Worst frame {worst:.0f}ms > 500ms - would cause visible hang **")
+    if worst > 5000:
+        print(f"  ** CRITICAL: Worst frame {worst:.0f}ms > 5s - would trigger 'Not Responding' **")
 
-print()
-print("GPU/OpenGL info:")
+if frame_times_single:
+    avg = sum(frame_times_single) / len(frame_times_single)
+    worst = max(frame_times_single)
+    p95 = sorted(frame_times_single)[int(len(frame_times_single) * 0.95)]
+    print(f"\nTEST 3 - Single tile updating (4 setData calls per frame):")
+    print(f"  Frames:     {len(frame_times_single)}")
+    print(f"  Avg frame:  {avg:.1f}ms")
+    print(f"  P95 frame:  {p95:.1f}ms")
+    print(f"  Worst frame: {worst:.1f}ms")
+
+print("\nGPU/OpenGL info:")
 try:
     from PySide6.QtGui import QSurfaceFormat
     fmt = QSurfaceFormat.defaultFormat()
     print(f"  OpenGL profile: {fmt.profile()}")
     print(f"  Render type: {fmt.renderableType()}")
 except Exception as e:
-    print(f"  Could not get surface format: {e}")
+    print(f"  Error: {e}")
 
-widget.close()
+print(f"\nDisplay: {app.primaryScreen().size().width()}x{app.primaryScreen().size().height()}")
+print(f"Device pixel ratio: {app.primaryScreen().devicePixelRatio()}")
+print(f"Logical DPI: {app.primaryScreen().logicalDotsPerInch()}")
+
+window.close()
 app.quit()
