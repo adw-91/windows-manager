@@ -213,14 +213,14 @@ class ExpandableMetricTile(QFrame):
 
         if self._metric_type == "multi" and self._series_config:
             self._graph = MultiLineGraph(
-                max_points=60,
+                max_points=120,
                 y_range=self._y_range,
                 series_config=self._series_config,
                 show_legend=True,
             )
         else:
             self._graph = LiveGraph(
-                max_points=60,
+                max_points=120,
                 y_range=self._y_range,
             )
 

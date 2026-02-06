@@ -96,7 +96,7 @@ class SystemOverviewTab(QWidget):
     """Tab showing system overview with expandable metric tiles."""
 
     UPDATE_INTERVAL_MS = 1000  # 1 second for tile values
-    GRAPH_INTERVAL_MS = 1000  # 1 second for graph updates
+    GRAPH_INTERVAL_MS = 500  # 500ms for smooth graph updates
 
     def __init__(self) -> None:
         super().__init__()
