@@ -479,7 +479,7 @@ class SystemOverviewTab(QWidget):
 
         # Details worker (slower updates for detailed info)
         details_worker = LoopingWorker(
-            5000,  # 5 seconds — handle/thread counting is slow with EDR
+            5000,  # 5 seconds for system metrics (CPU freq, memory, disk, network)
             self._collect_details,
         )
         details_worker.signals.result.connect(self._update_details)

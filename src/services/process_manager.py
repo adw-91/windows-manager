@@ -18,6 +18,7 @@ class ProcessManager:
 
     def __init__(self):
         self._prev_times: Dict[int, int] = {}  # pid -> (user_time_ns + kernel_time_ns)
+        self._prev_create_times: Dict[int, int] = {}  # pid -> create_time_ns (detect PID reuse)
         self._prev_wall_time: float = 0.0
         self._lock = Lock()
         self._initialized = False
@@ -41,21 +42,25 @@ class ProcessManager:
 
             processes = []
             current_times: Dict[int, int] = {}
+            current_create_times: Dict[int, int] = {}
 
             for proc in raw:
                 pid = proc["pid"]
                 total_time = proc["user_time_ns"] + proc["kernel_time_ns"]
+                create_time = proc["create_time_ns"]
                 current_times[pid] = total_time
+                current_create_times[pid] = create_time
 
                 # Compute CPU %
                 cpu_percent = 0.0
                 if self._initialized and wall_delta_ns > 0 and pid in self._prev_times:
-                    time_delta = total_time - self._prev_times[pid]
-                    if time_delta > 0:
-                        # time_delta / wall_delta gives fraction of one CPU core
-                        # Divide by cpu_count to get percentage of total system
-                        cpu_percent = (time_delta / wall_delta_ns) * 100.0 / self._cpu_count
-                        cpu_percent = min(cpu_percent, 100.0)
+                    # Check create_time to detect PID reuse between snapshots
+                    if create_time == self._prev_create_times.get(pid, 0):
+                        time_delta = total_time - self._prev_times[pid]
+                        if time_delta > 0:
+                            # Normalize to percentage of total system CPU
+                            cpu_percent = (time_delta / wall_delta_ns) * 100.0 / self._cpu_count
+                            cpu_percent = min(cpu_percent, 100.0)
 
                 processes.append({
                     "pid": pid,
@@ -66,6 +71,7 @@ class ProcessManager:
                 })
 
             self._prev_times = current_times
+            self._prev_create_times = current_create_times
             self._prev_wall_time = now
             self._latest_snapshot = raw
             self._initialized = True

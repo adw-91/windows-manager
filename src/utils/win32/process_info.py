@@ -7,10 +7,7 @@ on enterprise machines.
 """
 import ctypes
 from ctypes import wintypes
-import logging
 from typing import List, Dict, Any
-
-logger = logging.getLogger(__name__)
 
 ntdll = ctypes.windll.ntdll
 
