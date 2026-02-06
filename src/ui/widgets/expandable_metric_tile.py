@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QSizePolicy,
 )
-from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, Property
+from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, Property, QTimer
 from PySide6.QtGui import QCursor
 
 from src.ui.theme import Colors
@@ -77,6 +77,7 @@ class ExpandableMetricTile(QFrame):
         self._series_config = series_config
         self._detail_labels = detail_labels or []
         self._is_expanded = False
+        self._animating = False  # Suppress graph updates during expand animation
         self._detail_widgets: dict[str, DetailLabel] = {}
 
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -257,6 +258,7 @@ class ExpandableMetricTile(QFrame):
             return
 
         self._is_expanded = True
+        self._animating = True  # Suppress graph updates during animation
         self._expand_indicator.setText("▲")
 
         # Create graph on first expansion
@@ -275,7 +277,14 @@ class ExpandableMetricTile(QFrame):
         self._animation.setEndValue(target_height)
         self._animation.start()
 
+        # Allow graph updates after animation completes (200ms)
+        QTimer.singleShot(250, self._on_expand_animation_done)
+
         self.expanded.emit(self)
+
+    def _on_expand_animation_done(self) -> None:
+        """Re-enable graph updates after expand animation finishes."""
+        self._animating = False
 
     def collapse(self) -> None:
         """Collapse the tile to hide the graph and details."""
@@ -338,7 +347,7 @@ class ExpandableMetricTile(QFrame):
 
     def add_graph_point(self, value: float, series: str = "default") -> None:
         """Add a data point to the graph."""
-        if self._graph is not None:
+        if self._graph is not None and not self._animating:
             self._graph.add_point(value, series)
 
     def update_progress(self, progress: float) -> None:

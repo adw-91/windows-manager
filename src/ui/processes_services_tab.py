@@ -35,7 +35,7 @@ class ProcessesServicesTab(QWidget):
     COL_STATUS = 4
 
     # Auto-refresh interval
-    REFRESH_INTERVAL_MS = 1000
+    REFRESH_INTERVAL_MS = 2000
 
     def __init__(self) -> None:
         super().__init__()

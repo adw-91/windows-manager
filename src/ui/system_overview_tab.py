@@ -96,7 +96,7 @@ class SystemOverviewTab(QWidget):
     """Tab showing system overview with expandable metric tiles."""
 
     UPDATE_INTERVAL_MS = 1000  # 1 second for tile values
-    GRAPH_INTERVAL_MS = 500   # 500ms for graph updates
+    GRAPH_INTERVAL_MS = 1000  # 1 second for graph updates
 
     def __init__(self) -> None:
         super().__init__()
@@ -639,6 +639,10 @@ class SystemOverviewTab(QWidget):
         """
         # Only update the expanded tile's graph (if any)
         if self._expanded_tile is None:
+            return
+
+        # Skip updates during expand animation to avoid render storm
+        if self._expanded_tile._animating:
             return
 
         if self._expanded_tile == self._cpu_tile and self._cpu_tile._graph is not None:

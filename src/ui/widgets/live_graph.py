@@ -9,6 +9,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QGraphicsView
 
 from src.ui.theme import Colors
 
@@ -115,6 +116,10 @@ class LiveGraph(pg.PlotWidget):
         self._resize_timer.timeout.connect(self._do_deferred_resize)
         self._pending_resize_event = None
         self._resizing = False  # Track if resize is in progress
+
+        # Reduce repaint cost: only redraw changed regions, cache static background
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.MinimalViewportUpdate)
+        self.setCacheMode(QGraphicsView.CacheModeFlag.CacheBackground)
 
         # Configure appearance
         self._setup_style(title, y_label, show_grid)
