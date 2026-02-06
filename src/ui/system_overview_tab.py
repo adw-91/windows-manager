@@ -309,7 +309,14 @@ class SystemOverviewTab(QWidget):
 
     def _on_tile_collapsed(self, tile: ExpandableMetricTile) -> None:
         """When tile collapses, restore normal 4x1 horizontal layout."""
-        self._expanded_tile = None
+        # Only clear if this tile is still the expanded one.
+        # When switching tiles, _on_tile_expanded sets the new tile first,
+        # then collapses the old one — don't overwrite the new reference.
+        if self._expanded_tile == tile:
+            self._expanded_tile = None
+        else:
+            # Another tile is expanding — it will handle the layout
+            return
 
         # Remove all tiles from layout
         all_tiles = [self._cpu_tile, self._memory_tile, self._disk_tile, self._network_tile]
