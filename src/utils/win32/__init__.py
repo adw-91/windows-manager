@@ -6,6 +6,7 @@ Submodules:
     system_info - ctypes wrappers (locale, memory, firmware)
     security   - Token, SID, admin check helpers
     gpo        - Group Policy enumeration
+    process_info - Native process enumeration via NtQuerySystemInformation
 """
 from src.utils.win32.registry import read_string, read_dword, read_binary, read_qword, enumerate_subkeys
 from src.utils.win32.wmi import WmiConnection
@@ -23,3 +24,4 @@ from src.utils.win32.security import (
     get_current_domain,
 )
 from src.utils.win32.gpo import get_applied_gpos
+from src.utils.win32.process_info import enumerate_processes
