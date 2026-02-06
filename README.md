@@ -8,19 +8,20 @@ Windows Manager provides a unified interface for managing Windows system resourc
 
 ## Features
 
-- **Overview** - Live metrics dashboard (CPU, memory, disk, uptime) with real-time graphs
+- **Overview** - Live metrics dashboard (CPU, memory, disk, network) with real-time graphs, installed software, startup apps, battery health
 - **System** - Comprehensive system information (msinfo32-style) in card-based layout
 - **Processes & Services** - Process monitoring with RAG coloring, service management
-- **Software** - Installed programs inventory and startup management
-- **Enterprise** - User info, Entra ID status, domain/workgroup, Group Policy
+- **Drivers** - Device driver inventory via WMI COM
 - **Task Scheduler** - View and manage scheduled tasks
+- **Enterprise** - User info, Entra ID status, domain/workgroup, Group Policy
 
 See [PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md) for detailed feature documentation.
 
 ## Technology Stack
 
 - Python 3.13 / PySide6
-- psutil, pywin32, pyqtgraph
+- psutil, pywin32, pyqtgraph, numpy
+- Native Win32 APIs via ctypes (NtQuerySystemInformation, kernel32, userenv)
 
 ## Getting Started
 
@@ -65,12 +66,7 @@ venv\Scripts\python -m src.main
 
 Run tests:
 ```bash
-python -m unittest discover tests
-```
-
-Run specific test:
-```bash
-python -m unittest tests.test_system_monitor
+python -m pytest tests/ -v
 ```
 
 ## License

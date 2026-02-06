@@ -3,7 +3,7 @@
 ## Architecture Patterns
 
 - **Services**: Use singleton pattern with `get_<service>()` functions returning global instances
-  - `ProcessManager`: Process enumeration with CPU caching
+  - `ProcessManager`: Native process enumeration via NtQuerySystemInformation with CPU delta tracking
   - `ServiceInfo`: Windows service management
   - `EnterpriseInfo`: Domain, Azure AD, Group Policy
   - `TaskSchedulerInfo`: Task Scheduler via COM (Schedule.Service)
@@ -27,6 +27,7 @@
 - Filter system components: Skip if `SystemComponent=1` or `ParentKeyName` exists
 - Software registry keys: DisplayName, Publisher, DisplayVersion, InstallLocation, InstallDate, InstallSource, UninstallString, ModifyPath, EstimatedSize
 - Use native Win32 APIs via `src/utils/win32/` package (registry, WMI COM, ctypes) — no subprocess calls for data gathering
+- Process enumeration: Use `enumerate_processes()` from `src/utils/win32/process_info` — single kernel call, no per-process handles, bypasses EDR
 - CPU percentages: Normalize by dividing by `cpu_count` to get accurate readings
 
 ## UI Patterns
@@ -40,6 +41,7 @@
 ## Testing
 
 - Quick verification: `python -c "from src.services.module import Class; ..."`
+- Run tests: `python -m pytest tests/ -v`
 - Registry enumeration can be slow (10s timeout recommended)
 - Windows-specific: Requires pywin32, will fail on non-Windows
 

@@ -99,7 +99,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 ### Services Layer
 - `SystemMonitor`: CPU, memory, disk monitoring using psutil
 - `PerformanceMonitor`: Differential rate calculations (disk I/O, network I/O, context switches, interrupts) with thread-safe state
-- `ProcessManager`: Process enumeration with CPU caching for accurate readings
+- `ProcessManager`: Native process enumeration via NtQuerySystemInformation with CPU time-delta tracking
 - `WindowsInfo`: System information via registry, ctypes, WMI COM
 - `ServiceInfo`: Windows service management via win32service SCM API
 - `DriverInfo`: Device driver enumeration via WMI COM
@@ -137,6 +137,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
   - `system_info.py`: ctypes kernel32 wrappers (locale, memory, firmware, secure boot)
   - `security.py`: Token-based SID, admin check, username/domain
   - `gpo.py`: GPO enumeration via GetAppliedGPOListW
+  - `process_info.py`: Native process enumeration via NtQuerySystemInformation
 
 ## Technology Stack
 - Python 3.13
@@ -145,14 +146,15 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - pywin32 (Windows service management, COM, security tokens)
 - pyqtgraph (Real-time graphs with numpy backend)
 - numpy (Efficient data storage via ring buffers)
-- ctypes (Windows API: locale, memory, firmware, GPO, key state)
+- ctypes (Windows API: locale, memory, firmware, GPO, key state, NtQuerySystemInformation)
 - winreg (Registry access for system information)
 
 ## Key Implementation Details
 
 ### CPU Percentage Accuracy
-- psutil returns CPU as percentage of all cores combined
-- Normalized by dividing by `cpu_count` to get per-core average
+- ProcessManager computes CPU% from kernel/user time deltas between NtQuerySystemInformation snapshots
+- Normalized by dividing by `cpu_count` to get percentage of total system capacity
+- PID reuse detected via `create_time_ns` to prevent spurious spikes
 - Capped at 100% for display
 
 ### Ctrl Key Pause (Processes)
@@ -225,6 +227,8 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - Task Scheduler: COM (Schedule.Service) instead of schtasks parsing
 - Enterprise: win32net + registry + ctypes instead of dsregcmd/gpresult
 - Battery: WMI COM + registry instead of PowerShell
+- Process enumeration: NtQuerySystemInformation kernel call instead of psutil.process_iter() (228x faster, bypasses EDR)
+- Thread/handle counts: Exact totals from kernel data instead of 20-process sampling/extrapolation
 - **Impact:** Eliminated process spawning overhead, faster data collection, no shell parsing fragility
 
 ### Compilation Options
