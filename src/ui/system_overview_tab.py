@@ -540,28 +540,8 @@ class SystemOverviewTab(QWidget):
         cpu_freq = psutil.cpu_freq()
         ctx_rate, int_rate = self._perf_monitor.get_cpu_rates()
 
-        pids = psutil.pids()
-        process_count = len(pids)
-
-        # Sample 20 processes for thread/handle estimates.
-        # num_handles() is very slow on enterprise machines with EDR (~22ms/proc).
-        sample_size = min(20, len(pids))
-        thread_count = 0
-        handle_count = 0
-        sampled = 0
-        for pid in pids[:sample_size]:
-            try:
-                proc = psutil.Process(pid)
-                thread_count += proc.num_threads()
-                if hasattr(proc, 'num_handles'):
-                    handle_count += proc.num_handles()
-                sampled += 1
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-
-        if sampled > 0 and len(pids) > sample_size:
-            thread_count = int(thread_count * len(pids) / sampled)
-            handle_count = int(handle_count * len(pids) / sampled)
+        process_count = self._process_manager.get_process_count()
+        thread_count, handle_count = self._process_manager.get_thread_handle_totals()
 
         mem = psutil.virtual_memory()
         swap = psutil.swap_memory()
@@ -588,8 +568,8 @@ class SystemOverviewTab(QWidget):
                 "Logical Processors": str(cpu_logical),
                 "Base Speed": f"{cpu_freq.current:.0f} MHz" if cpu_freq else "N/A",
                 "Processes": str(process_count),
-                "Threads": f"~{thread_count:,}",
-                "Handles": f"~{handle_count:,}" if handle_count else "N/A",
+                "Threads": f"{thread_count:,}",
+                "Handles": f"{handle_count:,}",
                 "Context Switches/s": f"{ctx_rate:,.0f}",
                 "Interrupts/s": f"{int_rate:,.0f}",
             },
