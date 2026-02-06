@@ -467,7 +467,8 @@ class SystemTab(QWidget):
         info = {}
         try:
             info["User"] = f"{os.environ.get('USERDOMAIN', '')}\\{os.environ.get('USERNAME', '')}"
-            info["Processes"] = str(len(psutil.pids()))
+            from src.services.process_manager import get_process_manager
+            info["Processes"] = str(get_process_manager().get_process_count())
 
             services = list(psutil.win_service_iter()) if hasattr(psutil, 'win_service_iter') else []
             running = sum(1 for s in services if s.status() == 'running')
