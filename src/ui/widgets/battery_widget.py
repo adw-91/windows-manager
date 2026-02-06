@@ -361,7 +361,10 @@ class BatteryWidget(QWidget):
                 if battery.get("DesignCapacity"):
                     result["design_capacity"] = f"{battery['DesignCapacity']} mWh"
                 if battery.get("DesignVoltage"):
-                    result["voltage"] = f"{battery['DesignVoltage'] / 1000:.2f} V"
+                    try:
+                        result["voltage"] = f"{int(battery['DesignVoltage']) / 1000:.2f} V"
+                    except (TypeError, ValueError):
+                        pass
 
                 chem_map = {
                     1: "Other", 2: "Unknown", 3: "Lead Acid",
@@ -434,7 +437,7 @@ class BatteryWidget(QWidget):
                     result["voltage"] = f"{status['Voltage'] / 1000:.2f} V"
 
             except Exception as e:
-                logger.debug("root\\WMI battery query failed: %s", e)
+                logger.warning("root\\WMI battery query failed: %s", e)
 
         except Exception as e:
             result["error"] = str(e)

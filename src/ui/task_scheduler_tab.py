@@ -94,17 +94,17 @@ class NewTaskDialog(QDialog):
             QFrame {{
                 background-color: {Colors.WARNING.name()};
                 border-radius: 4px;
-                padding: 8px;
             }}
             QLabel {{
                 color: #000000;
                 font-weight: normal;
             }}
         """)
+        warning_frame.setMaximumHeight(40)
         warning_layout = QHBoxLayout(warning_frame)
-        warning_layout.setContentsMargins(12, 8, 12, 8)
+        warning_layout.setContentsMargins(8, 6, 8, 6)
         warning_icon = QLabel("⚠️")
-        warning_icon.setStyleSheet("font-size: 16px;")
+        warning_icon.setStyleSheet("font-size: 14px;")
         warning_layout.addWidget(warning_icon)
         warning_text = QLabel("Creating scheduled tasks may require administrator privileges.")
         warning_text.setWordWrap(True)

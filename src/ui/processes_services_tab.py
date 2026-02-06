@@ -24,6 +24,20 @@ from src.ui.theme import Colors
 from src.ui.widgets.loading_indicator import LoadingOverlay
 
 
+class NumericTableWidgetItem(QTableWidgetItem):
+    """Table item that sorts numerically by UserRole data instead of lexicographically."""
+
+    def __lt__(self, other: QTableWidgetItem) -> bool:
+        self_val = self.data(Qt.ItemDataRole.UserRole)
+        other_val = other.data(Qt.ItemDataRole.UserRole)
+        if self_val is not None and other_val is not None:
+            try:
+                return float(self_val) < float(other_val)
+            except (TypeError, ValueError):
+                pass
+        return super().__lt__(other)
+
+
 class ProcessesServicesTab(QWidget):
     """Tab combining process management and services"""
 
@@ -441,7 +455,7 @@ class ProcessesServicesTab(QWidget):
             # PID — reuse existing item or create new
             pid_item = self._process_table.item(row, self.COL_PID)
             if pid_item is None:
-                pid_item = QTableWidgetItem()
+                pid_item = NumericTableWidgetItem()
                 self._process_table.setItem(row, self.COL_PID, pid_item)
             pid_item.setData(Qt.ItemDataRole.DisplayRole, str(proc.get("pid", "")))
             pid_item.setData(Qt.ItemDataRole.UserRole, proc.get("pid", 0))
@@ -457,7 +471,7 @@ class ProcessesServicesTab(QWidget):
             cpu_val = min(proc.get('cpu_percent', 0), 100.0)
             cpu_item = self._process_table.item(row, self.COL_CPU)
             if cpu_item is None:
-                cpu_item = QTableWidgetItem()
+                cpu_item = NumericTableWidgetItem()
                 self._process_table.setItem(row, self.COL_CPU, cpu_item)
             cpu_item.setData(Qt.ItemDataRole.DisplayRole, f"{cpu_val:.1f}%")
             cpu_item.setData(Qt.ItemDataRole.UserRole, cpu_val)
@@ -485,7 +499,7 @@ class ProcessesServicesTab(QWidget):
             mem_val = proc.get('memory_mb', 0)
             memory_item = self._process_table.item(row, self.COL_MEMORY)
             if memory_item is None:
-                memory_item = QTableWidgetItem()
+                memory_item = NumericTableWidgetItem()
                 self._process_table.setItem(row, self.COL_MEMORY, memory_item)
             memory_item.setData(Qt.ItemDataRole.DisplayRole, f"{mem_val:.1f}")
             memory_item.setData(Qt.ItemDataRole.UserRole, mem_val)

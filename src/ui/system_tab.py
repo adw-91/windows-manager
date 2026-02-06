@@ -34,7 +34,7 @@ class KeyValuePair(QWidget):
 
     def _init_ui(self):
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 2, 16, 2)  # Right margin for spacing between pairs
+        layout.setContentsMargins(0, 4, 16, 4)  # Right margin for spacing between pairs
         layout.setSpacing(6)
 
         # Key label
@@ -45,7 +45,7 @@ class KeyValuePair(QWidget):
 
         # Value label
         self._value_label = QLabel(str(self._value))
-        self._value_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY.name()}; font-size: 11px;")
+        self._value_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY.name()}; font-size: 12px; font-weight: 500;")
         self._value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self._value_label)
 
@@ -99,7 +99,7 @@ class InfoCard(QFrame):
 
         title_label = QLabel(self._title)
         title_label.setStyleSheet(f"""
-            font-size: 13px;
+            font-size: 14px;
             font-weight: bold;
             color: {Colors.ACCENT.name()};
         """)
@@ -116,7 +116,7 @@ class InfoCard(QFrame):
 
         # Content widget with flow layout
         self._content_widget = QWidget()
-        self._flow_layout = FlowLayout(self._content_widget, margin=0, h_spacing=8, v_spacing=6)
+        self._flow_layout = FlowLayout(self._content_widget, margin=0, h_spacing=8, v_spacing=8)
         layout.addWidget(self._content_widget)
 
     def set_data(self, data: Dict[str, str]):
@@ -276,7 +276,7 @@ class SystemTab(QWidget):
         # Card container - single column layout
         self._card_container = QWidget()
         self._card_layout = QVBoxLayout(self._card_container)
-        self._card_layout.setSpacing(10)
+        self._card_layout.setSpacing(12)
         self._card_layout.setContentsMargins(0, 0, 0, 0)
         self._card_container.setVisible(False)
 

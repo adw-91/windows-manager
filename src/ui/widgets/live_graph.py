@@ -113,7 +113,6 @@ class LiveGraph(pg.PlotWidget):
         self._resize_timer.setSingleShot(True)
         self._resize_timer.setInterval(self.RESIZE_DEBOUNCE_MS)
         self._resize_timer.timeout.connect(self._do_deferred_resize)
-        self._pending_resize_event = None
         self._resizing = False  # Track if resize is in progress
 
         # Configure appearance
@@ -302,8 +301,8 @@ class LiveGraph(pg.PlotWidget):
         """
         Handle resize with debouncing.
 
-        Instead of redrawing on every resize event during window drag,
-        we defer the actual resize to reduce CPU usage.
+        Always lets pyqtgraph handle ViewBox geometry (cheap), but
+        defers the expensive curve.setData() calls until resize ends.
         """
         # During parent __init__, timer may not exist yet
         if not hasattr(self, '_resize_timer'):
@@ -311,17 +310,13 @@ class LiveGraph(pg.PlotWidget):
             return
 
         self._resizing = True
-        self._pending_resize_event = event
         self._resize_timer.start()
+        super().resizeEvent(event)  # Always let pyqtgraph update ViewBox geometry
 
     def _do_deferred_resize(self) -> None:
-        """Execute the deferred resize after debounce delay."""
+        """Execute the deferred curve refresh after debounce delay."""
         self._resizing = False
-        if self._pending_resize_event is not None:
-            super().resizeEvent(self._pending_resize_event)
-            self._pending_resize_event = None
-            # Refresh all curves after resize completes
-            self._refresh_all_curves()
+        self._refresh_all_curves()
 
     def _refresh_all_curves(self) -> None:
         """Redraw all curves with current data."""

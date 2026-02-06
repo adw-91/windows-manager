@@ -17,6 +17,7 @@
 | Phase 7: Performance Optimisation | **Completed** | - |
 | Phase 8: Performance Bottlenecks | **Completed** | [2026-02-04-phase8-performance-design.md](plans/2026-02-04-phase8-performance-design.md) |
 | Phase 9: Native Win32 APIs | **Completed** | [2026-02-05-phase9-native-win32-apis.md](plans/2026-02-05-phase9-native-win32-apis.md) |
+| Bug Fix Pass | **Completed** | - |
 
 ---
 
@@ -58,6 +59,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
   - CPU normalization (divide by CPU count for accurate percentages)
   - RAG coloring: High CPU (red), Medium CPU (amber), Normal (default)
   - System Idle Process: Inverted RAG (high idle = green/good)
+  - Numeric sorting for PID, CPU%, and Memory columns (not lexicographic)
   - Ctrl key pauses sorting (uses Windows API GetAsyncKeyState)
   - End Task with confirmation dialog
   - Context menu: End Task, Copy PID, Copy Name, Refresh
@@ -163,6 +165,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 
 ### Battery Information
 - Uses WMI COM queries (root\cimv2 Win32_Battery + root\WMI BatteryStaticData/BatteryFullChargedCapacity)
+- WMI property types vary by hardware (e.g. DesignVoltage may be string or int) — values are explicitly cast
 - Power plan from registry (ActivePowerScheme GUID + FriendlyName lookup)
 - Calculates health as `FullChargeCapacity / DesignCapacity * 100`
 - Battery section only shown when battery hardware is detected
@@ -207,9 +210,9 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - **Impact:** Reduced per-cycle rendering cost
 
 #### Resize Debouncing
-- Graph resize events are debounced with 150ms delay
-- Skip rendering during resize, refresh all curves after resize completes
-- **Impact:** Smooth window resizing without graph lag
+- Graph resize events debounce the expensive `curve.setData()` calls with 150ms delay
+- pyqtgraph ViewBox geometry always updates immediately (cheap coordinate transforms)
+- **Impact:** Smooth window resizing without dark background gaps or graph lag
 
 #### Simplified Graph Rendering
 - Antialiasing disabled globally for pyqtgraph
