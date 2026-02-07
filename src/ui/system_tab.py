@@ -28,8 +28,15 @@ from src.utils.thread_utils import SingleRunWorker
 from src.ui.theme import Colors
 
 
-class PropertyList(QFrame):
-    """A property list displaying key-value pairs in a two-column grid layout."""
+class SectionCard(QFrame):
+    """A card with accent title, bordered container, and alternating-row key-value grid.
+
+    Visual design:
+    - WIDGET background with 1px BORDER, 8px border-radius
+    - Accent-colored bold title with separator line
+    - Left-aligned keys (160px column), left-aligned values
+    - Alternating row backgrounds (WINDOW_ALT vs transparent)
+    """
 
     def __init__(self, title: str = "", parent=None):
         super().__init__(parent)
@@ -39,7 +46,15 @@ class PropertyList(QFrame):
         self._init_ui()
 
     def _init_ui(self):
-        self.setStyleSheet("background: transparent;")
+        self.setStyleSheet(f"""
+            SectionCard {{
+                background-color: {Colors.WIDGET.name()};
+                border: 1px solid {Colors.BORDER.name()};
+                border-radius: 8px;
+            }}
+        """)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -50,25 +65,27 @@ class PropertyList(QFrame):
                 font-size: 13px;
                 font-weight: bold;
                 color: {Colors.ACCENT.name()};
-                padding: 8px 0 4px 0;
+                padding: 10px 12px 6px 12px;
+                background: transparent;
             """)
             layout.addWidget(title_label)
 
             separator = QFrame()
             separator.setFixedHeight(1)
-            separator.setStyleSheet(f"background-color: {Colors.BORDER.name()};")
+            separator.setStyleSheet(
+                f"background-color: {Colors.BORDER.name()}; margin: 0 8px;"
+            )
             layout.addWidget(separator)
 
         self._grid = QGridLayout()
-        self._grid.setContentsMargins(0, 6, 0, 6)
-        self._grid.setHorizontalSpacing(16)
-        self._grid.setVerticalSpacing(1)
+        self._grid.setContentsMargins(4, 4, 4, 4)
+        self._grid.setHorizontalSpacing(0)
+        self._grid.setVerticalSpacing(0)
         self._grid.setColumnMinimumWidth(0, 160)
         layout.addLayout(self._grid)
 
     def set_data(self, data: Dict[str, str]) -> None:
         """Replace all rows with new data."""
-        # Clear existing
         while self._grid.count():
             item = self._grid.takeAt(0)
             if item and item.widget():
@@ -81,15 +98,24 @@ class PropertyList(QFrame):
             self._add_row(key, str(value))
 
     def _add_row(self, key: str, value: str) -> None:
+        # Alternating row background
+        if self._row_count % 2 == 0:
+            row_bg = f"background-color: {Colors.WINDOW_ALT.name()};"
+        else:
+            row_bg = "background: transparent;"
+
         key_label = QLabel(f"{key}:")
         key_label.setStyleSheet(
-            f"color: {Colors.TEXT_SECONDARY.name()}; font-size: 12px; padding: 4px 0;"
+            f"color: {Colors.TEXT_SECONDARY.name()}; font-size: 12px; "
+            f"padding: 6px 8px; {row_bg}"
         )
-        key_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        key_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        key_label.setMinimumWidth(160)
 
         value_label = QLabel(value)
         value_label.setStyleSheet(
-            f"color: {Colors.TEXT_PRIMARY.name()}; font-size: 12px; font-weight: 500; padding: 4px 0;"
+            f"color: {Colors.TEXT_PRIMARY.name()}; font-size: 12px; "
+            f"font-weight: 500; padding: 6px 8px; {row_bg}"
         )
         value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         value_label.setWordWrap(True)
@@ -104,9 +130,7 @@ TAB_SUMMARY = 0
 TAB_HARDWARE = 1
 TAB_COMPONENTS = 2
 TAB_SECURITY = 3
-TAB_TPM = 4
-TAB_NETWORK = 5
-TAB_BOOT_FIRMWARE = 6
+TAB_NETWORK = 4
 
 
 class SystemTab(QWidget):
@@ -118,15 +142,15 @@ class SystemTab(QWidget):
         self._loaded_subtabs: set = set()
         self._workers: Dict[int, SingleRunWorker] = {}
 
-        # Per-subtab property list references
-        self._summary_list: Optional[PropertyList] = None
-        self._hardware_list: Optional[PropertyList] = None
-        self._components_list: Optional[PropertyList] = None
-        self._security_list: Optional[PropertyList] = None
-        self._bitlocker_list: Optional[PropertyList] = None
-        self._tpm_list: Optional[PropertyList] = None
-        self._network_list: Optional[PropertyList] = None
-        self._boot_list: Optional[PropertyList] = None
+        # Per-subtab card references
+        self._summary_card: Optional[SectionCard] = None
+        self._hardware_card: Optional[SectionCard] = None
+        self._boot_firmware_card: Optional[SectionCard] = None
+        self._components_card: Optional[SectionCard] = None
+        self._security_card: Optional[SectionCard] = None
+        self._tpm_card: Optional[SectionCard] = None
+        self._bitlocker_card: Optional[SectionCard] = None
+        self._network_card: Optional[SectionCard] = None
 
         # Per-subtab loading labels
         self._loading_labels: Dict[int, QLabel] = {}
@@ -172,7 +196,7 @@ class SystemTab(QWidget):
 
         layout.addLayout(header_layout)
 
-        # Tab widget for sub-sections
+        # Tab widget for sub-sections (5 tabs)
         self._tab_widget = QTabWidget()
         self._tab_widget.currentChanged.connect(self._on_subtab_changed)
 
@@ -180,9 +204,7 @@ class SystemTab(QWidget):
         self._tab_widget.addTab(self._create_hardware_tab(), "Hardware")
         self._tab_widget.addTab(self._create_components_tab(), "Components")
         self._tab_widget.addTab(self._create_security_tab(), "Security")
-        self._tab_widget.addTab(self._create_tpm_tab(), "TPM")
         self._tab_widget.addTab(self._create_network_tab(), "Network")
-        self._tab_widget.addTab(self._create_boot_firmware_tab(), "Boot & Firmware")
 
         layout.addWidget(self._tab_widget)
 
@@ -198,8 +220,8 @@ class SystemTab(QWidget):
         self._loading_labels[tab_index] = label
         return label
 
-    def _create_subtab_container(self, tab_index: int, property_lists: list) -> QWidget:
-        """Create a scrollable container for a sub-tab with property lists."""
+    def _create_subtab_container(self, tab_index: int, content_widget: QWidget) -> QWidget:
+        """Create a scrollable container for a sub-tab with a pre-built content widget."""
         container = QWidget()
         container_layout = QVBoxLayout(container)
         container_layout.setContentsMargins(0, 0, 0, 0)
@@ -209,24 +231,20 @@ class SystemTab(QWidget):
         loading = self._create_loading_label(tab_index)
         container_layout.addWidget(loading)
 
-        # Scroll area with property lists
+        # Scroll area wrapping the content widget
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet("QScrollArea { background: transparent; }")
 
-        content = QWidget()
-        content.setStyleSheet("background: transparent;")
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(8, 8, 8, 8)
-        content_layout.setSpacing(16)
+        content_widget.setStyleSheet(
+            content_widget.styleSheet() + " QWidget { background: transparent; }"
+            if content_widget.styleSheet()
+            else "background: transparent;"
+        )
 
-        for plist in property_lists:
-            content_layout.addWidget(plist)
-        content_layout.addStretch()
-
-        scroll.setWidget(content)
+        scroll.setWidget(content_widget)
         scroll.setVisible(False)
         container_layout.addWidget(scroll)
 
@@ -235,33 +253,75 @@ class SystemTab(QWidget):
         return container
 
     def _create_summary_tab(self) -> QWidget:
-        self._summary_list = PropertyList()
-        return self._create_subtab_container(TAB_SUMMARY, [self._summary_list])
+        self._summary_card = SectionCard("System Summary")
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(16)
+        lay.addWidget(self._summary_card)
+        return self._create_subtab_container(TAB_SUMMARY, content)
 
     def _create_hardware_tab(self) -> QWidget:
-        self._hardware_list = PropertyList()
-        return self._create_subtab_container(TAB_HARDWARE, [self._hardware_list])
+        """Hardware (left) + Boot & Firmware (right) side by side."""
+        self._hardware_card = SectionCard("Hardware")
+        self._boot_firmware_card = SectionCard("Boot & Firmware")
+
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(16)
+
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        row.addWidget(self._hardware_card)
+        row.addWidget(self._boot_firmware_card)
+        lay.addLayout(row)
+
+        return self._create_subtab_container(TAB_HARDWARE, content)
 
     def _create_components_tab(self) -> QWidget:
-        self._components_list = PropertyList()
-        return self._create_subtab_container(TAB_COMPONENTS, [self._components_list])
+        self._components_card = SectionCard("Components")
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(16)
+        lay.addWidget(self._components_card)
+        return self._create_subtab_container(TAB_COMPONENTS, content)
 
     def _create_security_tab(self) -> QWidget:
-        self._security_list = PropertyList("Security Status")
-        self._bitlocker_list = PropertyList("BitLocker Encryption")
-        return self._create_subtab_container(TAB_SECURITY, [self._security_list, self._bitlocker_list])
+        """Security (left) + TPM (right) on top, BitLocker full-width below."""
+        self._security_card = SectionCard("Security Status")
+        self._tpm_card = SectionCard("TPM")
+        self._bitlocker_card = SectionCard("BitLocker Encryption")
 
-    def _create_tpm_tab(self) -> QWidget:
-        self._tpm_list = PropertyList()
-        return self._create_subtab_container(TAB_TPM, [self._tpm_list])
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(12)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(12)
+        top_row.addWidget(self._security_card)
+        top_row.addWidget(self._tpm_card)
+        lay.addLayout(top_row)
+
+        lay.addWidget(self._bitlocker_card)
+
+        return self._create_subtab_container(TAB_SECURITY, content)
 
     def _create_network_tab(self) -> QWidget:
-        self._network_list = PropertyList()
-        return self._create_subtab_container(TAB_NETWORK, [self._network_list])
-
-    def _create_boot_firmware_tab(self) -> QWidget:
-        self._boot_list = PropertyList()
-        return self._create_subtab_container(TAB_BOOT_FIRMWARE, [self._boot_list])
+        self._network_card = SectionCard("Network")
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(16)
+        lay.addWidget(self._network_card)
+        return self._create_subtab_container(TAB_NETWORK, content)
 
     @Slot(int)
     def _on_subtab_changed(self, index: int) -> None:
@@ -276,9 +336,7 @@ class SystemTab(QWidget):
             TAB_HARDWARE: self._collect_hardware_info,
             TAB_COMPONENTS: self._collect_components_info,
             TAB_SECURITY: self._collect_security_info,
-            TAB_TPM: self._collect_tpm_info,
             TAB_NETWORK: self._collect_network_info,
-            TAB_BOOT_FIRMWARE: self._collect_boot_firmware_info,
         }
 
         collector = collectors.get(tab_index)
@@ -310,24 +368,25 @@ class SystemTab(QWidget):
         if hasattr(container, '_scroll'):
             container._scroll.setVisible(True)
 
-        # Populate property lists
-        if tab_index == TAB_SUMMARY and self._summary_list:
-            self._summary_list.set_data(data)
-        elif tab_index == TAB_HARDWARE and self._hardware_list:
-            self._hardware_list.set_data(data)
-        elif tab_index == TAB_COMPONENTS and self._components_list:
-            self._components_list.set_data(data)
+        # Populate cards
+        if tab_index == TAB_SUMMARY and self._summary_card:
+            self._summary_card.set_data(data)
+        elif tab_index == TAB_HARDWARE:
+            if self._hardware_card:
+                self._hardware_card.set_data(data.get("hardware", {}))
+            if self._boot_firmware_card:
+                self._boot_firmware_card.set_data(data.get("boot_firmware", {}))
+        elif tab_index == TAB_COMPONENTS and self._components_card:
+            self._components_card.set_data(data)
         elif tab_index == TAB_SECURITY:
-            if self._security_list:
-                self._security_list.set_data(data.get("security", {}))
-            if self._bitlocker_list:
-                self._bitlocker_list.set_data(data.get("bitlocker", {}))
-        elif tab_index == TAB_TPM and self._tpm_list:
-            self._tpm_list.set_data(data)
-        elif tab_index == TAB_NETWORK and self._network_list:
-            self._network_list.set_data(data)
-        elif tab_index == TAB_BOOT_FIRMWARE and self._boot_list:
-            self._boot_list.set_data(data)
+            if self._security_card:
+                self._security_card.set_data(data.get("security", {}))
+            if self._tpm_card:
+                self._tpm_card.set_data(data.get("tpm", {}))
+            if self._bitlocker_card:
+                self._bitlocker_card.set_data(data.get("bitlocker", {}))
+        elif tab_index == TAB_NETWORK and self._network_card:
+            self._network_card.set_data(data)
 
     @Slot()
     def _on_subtab_error(self, tab_index: int, error_msg: str) -> None:
@@ -339,20 +398,14 @@ class SystemTab(QWidget):
     # -- Data collectors (run in worker threads) --
 
     def _collect_summary_info(self) -> Dict[str, str]:
-        """Collect summary information."""
+        """Collect summary information (identity/status only)."""
         info = {}
         try:
             info["Computer Name"] = socket.gethostname()
             info["OS"] = f"{platform.system()} {platform.release()}"
             info["Version"] = platform.version()
-            info["Manufacturer"] = self._windows_info.get_manufacturer()
             info["Model"] = self._windows_info.get_model()
             info["Architecture"] = platform.machine()
-            info["Processor"] = self._windows_info.get_processor()
-
-            mem = psutil.virtual_memory()
-            info["RAM"] = f"{mem.total / (1024**3):.1f} GB"
-            info["Available RAM"] = f"{mem.available / (1024**3):.1f} GB ({100-mem.percent:.0f}%)"
 
             boot_dt = datetime.fromtimestamp(psutil.boot_time())
             info["Boot Time"] = boot_dt.strftime("%Y-%m-%d %H:%M")
@@ -375,36 +428,36 @@ class SystemTab(QWidget):
             info["Error"] = str(e)
         return info
 
-    def _collect_hardware_info(self) -> Dict[str, str]:
-        """Collect hardware resources information."""
-        info = {}
+    def _collect_hardware_info(self) -> Dict[str, dict]:
+        """Collect hardware + boot/firmware information as merged dict."""
+        hardware = {}
         try:
-            info["Processor"] = self._windows_info.get_processor()
+            hardware["Processor"] = self._windows_info.get_processor()
 
             cpu_count = psutil.cpu_count(logical=False) or 0
             cpu_logical = psutil.cpu_count(logical=True) or 0
-            info["CPU Cores"] = f"{cpu_count} physical, {cpu_logical} logical"
+            hardware["CPU Cores"] = f"{cpu_count} physical, {cpu_logical} logical"
 
             cpu_freq = psutil.cpu_freq()
             if cpu_freq:
-                info["CPU Speed"] = f"{cpu_freq.current:.0f} MHz (max {cpu_freq.max:.0f})"
+                hardware["CPU Speed"] = f"{cpu_freq.current:.0f} MHz (max {cpu_freq.max:.0f})"
 
             mem = psutil.virtual_memory()
-            info["Total RAM"] = f"{mem.total / (1024**3):.1f} GB"
+            hardware["Total RAM"] = f"{mem.total / (1024**3):.1f} GB"
 
             memory_sticks = self._windows_info._get_memory_stick_capacities()
             if memory_sticks:
                 stick_gb = [f"{c/(1024**3):.0f}GB" for c in memory_sticks]
-                info["Memory Config"] = f"{len(memory_sticks)} stick(s): {', '.join(stick_gb)}"
+                hardware["Memory Config"] = f"{len(memory_sticks)} stick(s): {', '.join(stick_gb)}"
 
             bios_path = r"HARDWARE\DESCRIPTION\System\BIOS"
-            info["Manufacturer"] = read_string(
+            hardware["Manufacturer"] = read_string(
                 winreg.HKEY_LOCAL_MACHINE, bios_path, "SystemManufacturer",
             ) or "Unknown"
-            info["Product Name"] = read_string(
+            hardware["Product Name"] = read_string(
                 winreg.HKEY_LOCAL_MACHINE, bios_path, "SystemProductName",
             ) or "Unknown"
-            info["BIOS"] = read_string(
+            hardware["BIOS"] = read_string(
                 winreg.HKEY_LOCAL_MACHINE, bios_path, "BIOSVersion",
             ) or "Unknown"
 
@@ -414,11 +467,14 @@ class SystemTab(QWidget):
             bb_prod = read_string(
                 winreg.HKEY_LOCAL_MACHINE, bios_path, "BaseBoardProduct",
             ) or ""
-            info["Baseboard"] = f"{bb_mfr} {bb_prod}".strip()
+            hardware["Baseboard"] = f"{bb_mfr} {bb_prod}".strip()
 
         except Exception as e:
-            info["Error"] = str(e)
-        return info
+            hardware["Error"] = str(e)
+
+        boot_firmware = self._get_boot_firmware_info()
+
+        return {"hardware": hardware, "boot_firmware": boot_firmware}
 
     def _collect_components_info(self) -> Dict[str, str]:
         """Collect components information."""
@@ -498,7 +554,7 @@ class SystemTab(QWidget):
         return info
 
     def _collect_security_info(self) -> Dict[str, dict]:
-        """Collect security + BitLocker information."""
+        """Collect security + TPM + BitLocker information."""
         security = {}
         try:
             security["Security Center"] = "Active" if self._is_service_running("wscsvc") else "Inactive"
@@ -532,13 +588,10 @@ class SystemTab(QWidget):
         except Exception as e:
             security["Error"] = str(e)
 
+        tpm = self._get_tpm_info()
         bitlocker = self._get_bitlocker_info()
 
-        return {"security": security, "bitlocker": bitlocker}
-
-    def _collect_tpm_info(self) -> Dict[str, str]:
-        """Collect TPM information via TBS API + WMI fallback."""
-        return self._get_tpm_info()
+        return {"security": security, "tpm": tpm, "bitlocker": bitlocker}
 
     def _collect_network_info(self) -> Dict[str, str]:
         """Collect network information."""
@@ -600,10 +653,6 @@ class SystemTab(QWidget):
         except Exception as e:
             info["Error"] = str(e)
         return info
-
-    def _collect_boot_firmware_info(self) -> Dict[str, str]:
-        """Collect boot and firmware information."""
-        return self._get_boot_firmware_info()
 
     # -- Helpers --
 

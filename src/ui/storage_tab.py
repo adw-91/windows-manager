@@ -13,7 +13,7 @@ from PySide6.QtGui import QAction, QPainter, QColor, QPen, QBrush
 
 from src.services.storage_info import get_storage_info, DriveInfo, DirEntry
 from src.services.data_cache import DataCache, CacheState
-from src.utils.thread_utils import CancellableWorker
+from src.utils.thread_utils import CancellableWorker, SingleRunWorker
 from src.ui.theme import Colors
 from src.ui.widgets.flow_layout import FlowLayout
 from src.ui.widgets.loading_indicator import LoadingOverlay
@@ -181,6 +181,13 @@ class StorageTab(QWidget):
         self._data_loaded = False
         self._drives: List[DriveInfo] = []
         self._current_drive: Optional[DriveInfo] = None
+
+        # Two-phase scan state
+        self._path_to_item: Dict[str, QTreeWidgetItem] = {}
+        self._size_workers: List[CancellableWorker] = []
+        self._pending_sizes: int = 0
+        self._completed_sizes: int = 0
+
         self._init_ui()
         self._connect_signals()
 
@@ -335,57 +342,58 @@ class StorageTab(QWidget):
 
         self._tiles_frame.updateGeometry()
 
+    # ── Phase 1: Instant listing ──────────────────────────────────────
+
     def _on_drive_clicked(self, drive: DriveInfo) -> None:
-        """Start scanning the selected drive's root directory."""
+        """Start two-phase scan of the selected drive's root directory."""
         self._current_drive = drive
         self._tree_panel.setVisible(True)
-        self._tree_path_label.setText(f"{drive.letter}\\ — Scanning...")
+        self._tree_path_label.setText(f"{drive.letter}\\ — Loading...")
         self._tree.clear()
+        self._path_to_item.clear()
 
         # Cancel any existing scan
-        self._cancel_current_scan()
-
-        # Start new scan
-        self._scan_progress.setVisible(True)
-        self._scan_progress.setValue(0)
-        self._cancel_btn.setVisible(True)
+        self._cancel_all_workers()
 
         root_path = f"{drive.letter}\\"
-        self._current_scan_worker = CancellableWorker(
-            lambda w: self._storage_info.scan_directory(root_path, w)
+
+        # Phase 1: fast listing via SingleRunWorker
+        worker = SingleRunWorker(self._storage_info.list_directory, root_path)
+        worker.signals.result.connect(
+            lambda entries: self._on_listing_complete(root_path, entries)
         )
-        self._current_scan_worker.signals.result.connect(
-            lambda entries: self._on_scan_complete(root_path, entries)
-        )
-        self._current_scan_worker.signals.progress.connect(self._scan_progress.setValue)
-        self._current_scan_worker.signals.error.connect(self._on_scan_error)
-        QThreadPool.globalInstance().start(self._current_scan_worker)
+        worker.signals.error.connect(self._on_scan_error)
+        QThreadPool.globalInstance().start(worker)
 
     @Slot(object)
-    def _on_scan_complete(self, root_path: str, entries: List[DirEntry]) -> None:
-        """Populate tree with scan results."""
-        self._scan_progress.setVisible(False)
-        self._cancel_btn.setVisible(False)
-        self._current_scan_worker = None
+    def _on_listing_complete(self, root_path: str, entries: List[DirEntry]) -> None:
+        """Phase 1 complete — populate tree with unsized dirs, then start Phase 2."""
+        self._tree.clear()
+        self._path_to_item.clear()
 
         if self._current_drive:
             self._tree_path_label.setText(f"{self._current_drive.letter}\\")
 
-        # Calculate parent total for percentage
-        parent_total = sum(e.size_bytes for e in entries) or 1
-
-        self._tree.clear()
+        # Build tree items
+        dir_paths: List[str] = []
         for entry in entries:
             item = QTreeWidgetItem()
             icon = "📁" if entry.is_dir else "📄"
             if not entry.is_accessible:
                 icon = "🚫"
             item.setText(0, f"{icon}  {entry.name}")
-            item.setText(1, _format_size(entry.size_bytes))
-            pct = entry.size_bytes / parent_total * 100 if parent_total > 0 else 0
-            item.setText(2, f"{pct:.1f}%")
-            item.setData(2, Qt.ItemDataRole.UserRole, pct / 100)  # For potential bar rendering
-            item.setText(3, str(entry.item_count) if entry.is_dir else "")
+
+            if entry.is_dir and entry.is_accessible:
+                if entry.size_known:
+                    item.setText(1, _format_size(entry.size_bytes))
+                else:
+                    item.setText(1, "Calculating...")
+                    dir_paths.append(entry.path)
+            else:
+                item.setText(1, _format_size(entry.size_bytes))
+
+            item.setText(2, "")  # Percentage filled in after Phase 2
+            item.setText(3, str(entry.item_count) if entry.is_dir and entry.item_count else "")
             item.setData(0, Qt.ItemDataRole.UserRole, entry)
 
             # Add placeholder for lazy expansion of directories
@@ -396,17 +404,113 @@ class StorageTab(QWidget):
                 item.addChild(placeholder)
 
             self._tree.addTopLevelItem(item)
+            self._path_to_item[entry.path] = item
 
-    @Slot(str)
+        # Start Phase 2 if there are directories to size
+        if dir_paths:
+            self._start_size_calculations(dir_paths)
+
     def _on_scan_error(self, error_msg: str) -> None:
+        """Handle error from Phase 1 listing."""
         self._scan_progress.setVisible(False)
         self._cancel_btn.setVisible(False)
-        self._current_scan_worker = None
         self._tree_path_label.setText(f"Error: {error_msg}")
+
+    # ── Phase 2: Progressive size calculation ─────────────────────────
+
+    def _start_size_calculations(self, dir_paths: List[str]) -> None:
+        """Launch one CancellableWorker per directory for size calculation."""
+        self._pending_sizes = len(dir_paths)
+        self._completed_sizes = 0
+
+        self._scan_progress.setRange(0, self._pending_sizes)
+        self._scan_progress.setValue(0)
+        self._scan_progress.setVisible(True)
+        self._cancel_btn.setVisible(True)
+
+        for dir_path in dir_paths:
+            worker = CancellableWorker(
+                lambda w, p=dir_path: self._storage_info.calculate_entry_size(p, w)
+            )
+            worker.signals.result.connect(self._on_entry_size_calculated)
+            worker.signals.error.connect(self._on_entry_size_error)
+            self._size_workers.append(worker)
+            QThreadPool.globalInstance().start(worker)
+
+    @Slot(object)
+    def _on_entry_size_calculated(self, result: tuple) -> None:
+        """Update a single tree item's size in-place as Phase 2 results arrive."""
+        path, size_bytes, item_count = result
+        item = self._path_to_item.get(path)
+        if item:
+            item.setText(1, _format_size(size_bytes))
+            item.setText(3, str(item_count) if item_count else "")
+            # Update the stored DirEntry
+            entry = item.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(entry, DirEntry):
+                entry.size_bytes = size_bytes
+                entry.item_count = item_count
+                entry.size_known = True
+
+        self._completed_sizes += 1
+        self._scan_progress.setValue(self._completed_sizes)
+
+        if self._completed_sizes >= self._pending_sizes:
+            self._finalize_sizes()
+
+    @Slot(str)
+    def _on_entry_size_error(self, error_msg: str) -> None:
+        """Handle error from a single size calculation worker."""
+        self._completed_sizes += 1
+        self._scan_progress.setValue(self._completed_sizes)
+
+        if self._completed_sizes >= self._pending_sizes:
+            self._finalize_sizes()
+
+    def _finalize_sizes(self) -> None:
+        """All Phase 2 workers done — calculate percentages and re-sort."""
+        self._scan_progress.setVisible(False)
+        self._cancel_btn.setVisible(False)
+        self._size_workers.clear()
+
+        # Collect all top-level entries with their sizes
+        items_with_sizes = []
+        for i in range(self._tree.topLevelItemCount()):
+            item = self._tree.topLevelItem(i)
+            entry = item.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(entry, DirEntry):
+                items_with_sizes.append((item, entry))
+
+        # Calculate parent total for percentages
+        parent_total = sum(e.size_bytes for _, e in items_with_sizes) or 1
+
+        # Update percentages
+        for item, entry in items_with_sizes:
+            pct = entry.size_bytes / parent_total * 100 if parent_total > 0 else 0
+            item.setText(2, f"{pct:.1f}%")
+            item.setData(2, Qt.ItemDataRole.UserRole, pct / 100)
+
+        # Re-sort by size descending: take all items, sort, re-insert
+        self._tree.setSortingEnabled(False)
+        all_items = []
+        while self._tree.topLevelItemCount():
+            all_items.append(self._tree.takeTopLevelItem(0))
+
+        all_items.sort(
+            key=lambda item: (item.data(0, Qt.ItemDataRole.UserRole).size_bytes
+                              if isinstance(item.data(0, Qt.ItemDataRole.UserRole), DirEntry)
+                              else 0),
+            reverse=True,
+        )
+
+        for item in all_items:
+            self._tree.addTopLevelItem(item)
+
+    # ── Subdirectory expansion (two-phase) ────────────────────────────
 
     @Slot()
     def _on_item_expanded(self, item: QTreeWidgetItem) -> None:
-        """Handle tree item expansion — lazy scan child directory."""
+        """Handle tree item expansion — lazy scan child directory with two-phase approach."""
         if item.childCount() != 1:
             return
         child = item.child(0)
@@ -420,31 +524,35 @@ class StorageTab(QWidget):
         if not isinstance(entry, DirEntry) or not entry.is_dir:
             return
 
-        # Launch scan for this directory
+        # Phase 1: fast listing
         loading_item = QTreeWidgetItem()
-        loading_item.setText(0, "⏳ Scanning...")
+        loading_item.setText(0, "⏳ Loading...")
         loading_item.setData(0, Qt.ItemDataRole.UserRole, _PLACEHOLDER)
         item.addChild(loading_item)
 
-        worker = CancellableWorker(
-            lambda w: self._storage_info.scan_directory(entry.path, w)
-        )
+        worker = SingleRunWorker(self._storage_info.list_directory, entry.path)
         worker.signals.result.connect(
-            lambda entries, parent=item: self._on_subdir_scan_complete(parent, entries)
+            lambda entries, parent=item: self._on_subdir_listing_complete(parent, entries)
+        )
+        worker.signals.error.connect(
+            lambda err, parent=item: self._on_subdir_scan_error(parent, err)
         )
         QThreadPool.globalInstance().start(worker)
 
     @Slot(object)
-    def _on_subdir_scan_complete(self, parent_item: QTreeWidgetItem, entries: List[DirEntry]) -> None:
-        """Populate children after sub-directory scan."""
-        # Remove the scanning placeholder
+    def _on_subdir_listing_complete(
+        self, parent_item: QTreeWidgetItem, entries: List[DirEntry]
+    ) -> None:
+        """Phase 1 of subdirectory expansion complete — populate children, start Phase 2."""
+        # Remove the loading placeholder
         for i in range(parent_item.childCount()):
             child = parent_item.child(i)
             if child and child.data(0, Qt.ItemDataRole.UserRole) == _PLACEHOLDER:
                 parent_item.removeChild(child)
                 break
 
-        parent_total = sum(e.size_bytes for e in entries) or 1
+        dir_paths: List[str] = []
+        sub_path_to_item: Dict[str, QTreeWidgetItem] = {}
 
         for entry in entries:
             item = QTreeWidgetItem()
@@ -452,11 +560,19 @@ class StorageTab(QWidget):
             if not entry.is_accessible:
                 icon = "🚫"
             item.setText(0, f"{icon}  {entry.name}")
-            item.setText(1, _format_size(entry.size_bytes))
-            pct = entry.size_bytes / parent_total * 100 if parent_total > 0 else 0
-            item.setText(2, f"{pct:.1f}%")
-            item.setData(2, Qt.ItemDataRole.UserRole, pct / 100)
-            item.setText(3, str(entry.item_count) if entry.is_dir else "")
+
+            if entry.is_dir and entry.is_accessible:
+                if entry.size_known:
+                    item.setText(1, _format_size(entry.size_bytes))
+                else:
+                    item.setText(1, "Calculating...")
+                    dir_paths.append(entry.path)
+                    sub_path_to_item[entry.path] = item
+            else:
+                item.setText(1, _format_size(entry.size_bytes))
+
+            item.setText(2, "")
+            item.setText(3, str(entry.item_count) if entry.is_dir and entry.item_count else "")
             item.setData(0, Qt.ItemDataRole.UserRole, entry)
 
             if entry.is_dir and entry.is_accessible:
@@ -467,19 +583,108 @@ class StorageTab(QWidget):
 
             parent_item.addChild(item)
 
+        # Register in global path map for size updates
+        self._path_to_item.update(sub_path_to_item)
+
+        # Phase 2: size calculation for subdirectories
+        if dir_paths:
+            self._start_subtree_size_calculations(parent_item, dir_paths, sub_path_to_item)
+
+    def _start_subtree_size_calculations(
+        self,
+        parent_item: QTreeWidgetItem,
+        dir_paths: List[str],
+        sub_path_to_item: Dict[str, QTreeWidgetItem],
+    ) -> None:
+        """Launch size workers for expanded subdirectory children."""
+        pending = len(dir_paths)
+        completed = [0]  # mutable for closure
+
+        def on_subtree_size(result: tuple) -> None:
+            path, size_bytes, item_count = result
+            item = sub_path_to_item.get(path)
+            if item:
+                item.setText(1, _format_size(size_bytes))
+                item.setText(3, str(item_count) if item_count else "")
+                entry = item.data(0, Qt.ItemDataRole.UserRole)
+                if isinstance(entry, DirEntry):
+                    entry.size_bytes = size_bytes
+                    entry.item_count = item_count
+                    entry.size_known = True
+
+            completed[0] += 1
+            if completed[0] >= pending:
+                self._finalize_subtree_sizes(parent_item)
+
+        def on_subtree_error(err: str) -> None:
+            completed[0] += 1
+            if completed[0] >= pending:
+                self._finalize_subtree_sizes(parent_item)
+
+        for dir_path in dir_paths:
+            worker = CancellableWorker(
+                lambda w, p=dir_path: self._storage_info.calculate_entry_size(p, w)
+            )
+            worker.signals.result.connect(on_subtree_size)
+            worker.signals.error.connect(on_subtree_error)
+            self._size_workers.append(worker)
+            QThreadPool.globalInstance().start(worker)
+
+    def _finalize_subtree_sizes(self, parent_item: QTreeWidgetItem) -> None:
+        """Calculate percentages for a subtree after all sizes are known."""
+        children = []
+        for i in range(parent_item.childCount()):
+            child = parent_item.child(i)
+            entry = child.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(entry, DirEntry):
+                children.append((child, entry))
+
+        parent_total = sum(e.size_bytes for _, e in children) or 1
+
+        for child_item, entry in children:
+            pct = entry.size_bytes / parent_total * 100 if parent_total > 0 else 0
+            child_item.setText(2, f"{pct:.1f}%")
+            child_item.setData(2, Qt.ItemDataRole.UserRole, pct / 100)
+
+    @Slot()
+    def _on_subdir_scan_error(
+        self, parent_item: QTreeWidgetItem, error_msg: str
+    ) -> None:
+        """Handle error during subdirectory listing."""
+        # Remove loading placeholder
+        for i in range(parent_item.childCount()):
+            child = parent_item.child(i)
+            if child and child.data(0, Qt.ItemDataRole.UserRole) == _PLACEHOLDER:
+                parent_item.removeChild(child)
+                break
+
+        error_item = QTreeWidgetItem()
+        error_item.setText(0, f"🚫  Error: {error_msg}")
+        parent_item.addChild(error_item)
+
+    # ── Cancellation ──────────────────────────────────────────────────
+
     def _cancel_scan(self) -> None:
-        """Cancel the current root scan."""
-        self._cancel_current_scan()
+        """Cancel all active scans."""
+        self._cancel_all_workers()
         self._scan_progress.setVisible(False)
         self._cancel_btn.setVisible(False)
         if self._current_drive:
             self._tree_path_label.setText(f"{self._current_drive.letter}\\ — Cancelled")
 
-    def _cancel_current_scan(self) -> None:
-        """Cancel active scan worker if any."""
+    def _cancel_all_workers(self) -> None:
+        """Cancel all Phase 2 size workers and any root scan worker."""
         if self._current_scan_worker:
             self._current_scan_worker.cancel()
             self._current_scan_worker = None
+
+        for worker in self._size_workers:
+            worker.cancel()
+        self._size_workers.clear()
+        self._pending_sizes = 0
+        self._completed_sizes = 0
+
+    # ── Context menu ──────────────────────────────────────────────────
 
     @Slot()
     def _show_tree_context_menu(self, pos) -> None:
@@ -515,9 +720,11 @@ class StorageTab(QWidget):
 
         menu.exec(self._tree.viewport().mapToGlobal(pos))
 
+    # ── Lifecycle ─────────────────────────────────────────────────────
+
     @Slot()
     def _on_refresh(self) -> None:
-        self._cancel_current_scan()
+        self._cancel_all_workers()
         self._tree_panel.setVisible(False)
         self._drive_cache.refresh()
 
@@ -533,4 +740,4 @@ class StorageTab(QWidget):
 
     def cleanup(self) -> None:
         """Cancel any running scans on close."""
-        self._cancel_current_scan()
+        self._cancel_all_workers()

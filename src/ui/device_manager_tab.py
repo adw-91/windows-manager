@@ -102,7 +102,7 @@ class DeviceDetailPanel(QFrame):
         self._info_grid.setContentsMargins(0, 0, 0, 0)
         self._info_grid.setHorizontalSpacing(12)
         self._info_grid.setVerticalSpacing(4)
-        self._info_grid.setColumnMinimumWidth(0, 90)
+        self._info_grid.setColumnMinimumWidth(0, 120)
         self._layout.addLayout(self._info_grid)
 
         # Driver info grid (populated lazily)
@@ -115,7 +115,7 @@ class DeviceDetailPanel(QFrame):
         self._driver_grid.setContentsMargins(0, 0, 0, 0)
         self._driver_grid.setHorizontalSpacing(12)
         self._driver_grid.setVerticalSpacing(4)
-        self._driver_grid.setColumnMinimumWidth(0, 90)
+        self._driver_grid.setColumnMinimumWidth(0, 120)
         self._layout.addLayout(self._driver_grid)
 
         # Hardware IDs section
@@ -156,12 +156,12 @@ class DeviceDetailPanel(QFrame):
     def _add_grid_row(self, grid: QGridLayout, row: int, key: str, value: str) -> None:
         """Add a key-value row to a grid layout."""
         k = QLabel(f"{key}:")
-        k.setStyleSheet(f"color: {Colors.TEXT_SECONDARY.name()}; font-size: 11px;")
-        k.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        k.setStyleSheet(f"color: {Colors.TEXT_SECONDARY.name()}; font-size: 12px;")
+        k.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         grid.addWidget(k, row, 0)
 
         v = QLabel(str(value))
-        v.setStyleSheet(f"color: {Colors.TEXT_PRIMARY.name()}; font-size: 11px;")
+        v.setStyleSheet(f"color: {Colors.TEXT_PRIMARY.name()}; font-size: 12px;")
         v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         v.setWordWrap(True)
         grid.addWidget(v, row, 1)

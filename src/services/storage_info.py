@@ -7,7 +7,7 @@ Provides drive overview (psutil + WMI) and on-demand directory scanning.
 import os
 import logging
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import psutil
 from src.utils.win32.wmi import WmiConnection
@@ -49,6 +49,7 @@ class DirEntry:
     item_count: int
     is_dir: bool
     is_accessible: bool = True
+    size_known: bool = True
 
 
 class StorageInfo:
@@ -98,6 +99,87 @@ class StorageInfo:
             ))
 
         return drives
+
+    def list_directory(self, path: str) -> List[DirEntry]:
+        """Fast listing of immediate children — no recursion.
+
+        Files get stat size, directories get size_bytes=0 with size_known=False.
+        Sort: directories first by name, then files by size descending.
+        """
+        entries: List[DirEntry] = []
+
+        try:
+            children = list(os.scandir(path))
+        except (PermissionError, OSError):
+            return [DirEntry(
+                name="(Access denied)",
+                path=path,
+                size_bytes=0,
+                item_count=0,
+                is_dir=False,
+                is_accessible=False,
+                size_known=True,
+            )]
+
+        dirs: List[DirEntry] = []
+        files: List[DirEntry] = []
+
+        for entry in children:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    dirs.append(DirEntry(
+                        name=entry.name,
+                        path=entry.path,
+                        size_bytes=0,
+                        item_count=0,
+                        is_dir=True,
+                        is_accessible=True,
+                        size_known=False,
+                    ))
+                else:
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                        size = st.st_size
+                    except (PermissionError, OSError):
+                        size = 0
+                    files.append(DirEntry(
+                        name=entry.name,
+                        path=entry.path,
+                        size_bytes=size,
+                        item_count=1,
+                        is_dir=False,
+                        is_accessible=True,
+                        size_known=True,
+                    ))
+            except (PermissionError, OSError):
+                try:
+                    is_d = entry.is_dir(follow_symlinks=False)
+                except Exception:
+                    is_d = False
+                entries.append(DirEntry(
+                    name=entry.name,
+                    path=entry.path,
+                    size_bytes=0,
+                    item_count=0,
+                    is_dir=is_d,
+                    is_accessible=False,
+                    size_known=True,
+                ))
+
+        # Sort: dirs by name, files by size descending
+        dirs.sort(key=lambda e: e.name.lower())
+        files.sort(key=lambda e: e.size_bytes, reverse=True)
+
+        return dirs + files + entries
+
+    def calculate_entry_size(self, path: str, worker) -> Tuple[str, int, int]:
+        """Calculate the total size of a directory recursively.
+
+        Returns (path, size_bytes, item_count) so UI can map result to tree item.
+        The worker parameter must have an `is_cancelled` property.
+        """
+        size, count = self._calculate_dir_size(path, worker)
+        return (path, size, count)
 
     def scan_directory(self, path: str, worker) -> List[DirEntry]:
         """Scan a directory's immediate children with sizes.
