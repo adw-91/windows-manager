@@ -8,6 +8,8 @@
   - `EnterpriseInfo`: Domain, Azure AD, Group Policy
   - `TaskSchedulerInfo`: Task Scheduler via COM (Schedule.Service)
   - `WindowsInfo`: System information via registry, ctypes, WMI COM
+  - `DeviceInfo`: Device enumeration via native SetupAPI/CfgMgr32
+  - `StorageInfo`: Drive overview (psutil + WMI) and directory size scanning
 - **Caching**: `DataCache[T]` class in `src/services/data_cache.py` for slow operations (registry, WMI)
   - Background loading with `SingleRunWorker` - never block UI thread
   - Thread-safe with QMutex
@@ -16,7 +18,9 @@
   - `SingleRunWorker` - one-shot async tasks (registry, WMI queries)
   - `LoopingWorker` - recurring tasks (metrics, process refresh)
   - `CancellableWorker` - long-running cancellable operations
-- **Layouts**: Use `FlowLayout` from `src/ui/widgets/flow_layout.py` for key-value pairs that should reflow on resize
+- **Layouts**:
+  - `PropertyList` (QGridLayout-based) for key-value data in System tab sub-tabs and Device Manager detail panel
+  - `FlowLayout` from `src/ui/widgets/flow_layout.py` for widgets that should reflow on resize (Overview, Enterprise)
 
 ## Code Conventions
 
@@ -28,15 +32,21 @@
 - Software registry keys: DisplayName, Publisher, DisplayVersion, InstallLocation, InstallDate, InstallSource, UninstallString, ModifyPath, EstimatedSize
 - Use native Win32 APIs via `src/utils/win32/` package (registry, WMI COM, ctypes) — no subprocess calls for data gathering
 - Process enumeration: Use `enumerate_processes()` from `src/utils/win32/process_info` — single kernel call, no per-process handles, bypasses EDR
+- Device enumeration: Use `enumerate_devices()` from `src/utils/win32/device_api` — SetupAPI/CfgMgr32 ctypes (~50ms vs 2-5s WMI)
 - CPU percentages: Normalize by dividing by `cpu_count` to get accurate readings
 
 ## UI Patterns
 
-- **Card-based layouts**: Use `InfoCard`/`EnterpriseCard` for grouped information
-- **FlowLayout**: For key-value pairs that should reflow naturally on resize
+- **PropertyList**: Two-column QGridLayout for key-value display (System tab, Device Manager detail panel)
+- **Card-based layouts**: Use `EnterpriseCard` for grouped information in Enterprise tab
+- **FlowLayout**: For widgets that should reflow naturally on resize (Overview tab, Enterprise tab)
 - **RAG coloring**: Use `Colors.SUCCESS` (green), `Colors.WARNING` (amber), `Colors.ERROR` (red) for status
 - **Context menus**: Right-click menus for tables with common actions
 - **Loading overlays**: Use `LoadingOverlay` widget for async operations
+- **Tabbed sub-sections**: System tab uses QTabWidget with per-sub-tab lazy loading
+- **Tree + detail panel**: Device Manager and Task Scheduler use QSplitter with tree/detail layout
+- **Drive tiles**: Storage tab uses clickable DriveTile widgets with RAG progress bars
+- **TPM detection**: TBS API (`tbs.dll`) for non-admin detection, WMI fallback for detail
 
 ## Testing
 

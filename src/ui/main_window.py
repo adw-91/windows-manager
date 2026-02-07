@@ -11,7 +11,8 @@ from PySide6.QtGui import QAction
 from .system_overview_tab import SystemOverviewTab
 from .system_tab import SystemTab
 from .processes_services_tab import ProcessesServicesTab
-from .drivers_tab import DriversTab
+from .storage_tab import StorageTab
+from .device_manager_tab import DeviceManagerTab
 from .enterprise_tab import EnterpriseTab
 from .task_scheduler_tab import TaskSchedulerTab
 from .theme import Colors
@@ -106,18 +107,23 @@ class SidebarWidget(QFrame):
         layout.addWidget(self._processes_btn)
         self._buttons.append(self._processes_btn)
 
-        self._drivers_btn = NavButton("Drivers", "🔧")
-        self._drivers_btn.clicked.connect(lambda: self._on_nav_clicked(3))
-        layout.addWidget(self._drivers_btn)
-        self._buttons.append(self._drivers_btn)
+        self._storage_btn = NavButton("Storage", "💾")
+        self._storage_btn.clicked.connect(lambda: self._on_nav_clicked(3))
+        layout.addWidget(self._storage_btn)
+        self._buttons.append(self._storage_btn)
+
+        self._devices_btn = NavButton("Devices", "🖥️")
+        self._devices_btn.clicked.connect(lambda: self._on_nav_clicked(4))
+        layout.addWidget(self._devices_btn)
+        self._buttons.append(self._devices_btn)
 
         self._tasks_btn = NavButton("Tasks", "📅")
-        self._tasks_btn.clicked.connect(lambda: self._on_nav_clicked(4))
+        self._tasks_btn.clicked.connect(lambda: self._on_nav_clicked(5))
         layout.addWidget(self._tasks_btn)
         self._buttons.append(self._tasks_btn)
 
         self._enterprise_btn = NavButton("Enterprise", "🏢")
-        self._enterprise_btn.clicked.connect(lambda: self._on_nav_clicked(5))
+        self._enterprise_btn.clicked.connect(lambda: self._on_nav_clicked(6))
         layout.addWidget(self._enterprise_btn)
         self._buttons.append(self._enterprise_btn)
 
@@ -188,16 +194,18 @@ class MainWindow(QMainWindow):
         self.overview_tab = SystemOverviewTab()
         self.system_tab = SystemTab()
         self.processes_services_tab = ProcessesServicesTab()
-        self.drivers_tab = DriversTab()
+        self.storage_tab = StorageTab()
+        self.device_manager_tab = DeviceManagerTab()
         self.tasks_tab = TaskSchedulerTab()
         self.enterprise_tab = EnterpriseTab()
 
-        self._content_stack.addWidget(self.overview_tab)
-        self._content_stack.addWidget(self.system_tab)
-        self._content_stack.addWidget(self.processes_services_tab)
-        self._content_stack.addWidget(self.drivers_tab)
-        self._content_stack.addWidget(self.tasks_tab)
-        self._content_stack.addWidget(self.enterprise_tab)
+        self._content_stack.addWidget(self.overview_tab)       # 0
+        self._content_stack.addWidget(self.system_tab)         # 1
+        self._content_stack.addWidget(self.processes_services_tab)  # 2
+        self._content_stack.addWidget(self.storage_tab)        # 3
+        self._content_stack.addWidget(self.device_manager_tab) # 4
+        self._content_stack.addWidget(self.tasks_tab)          # 5
+        self._content_stack.addWidget(self.enterprise_tab)     # 6
 
         layout.addWidget(self._content_stack)
 
@@ -213,11 +221,13 @@ class MainWindow(QMainWindow):
             self.overview_tab.pause_updates()
 
         # Lazy load tabs on first activation
-        if index == 3:  # Drivers tab
-            self.drivers_tab.on_tab_activated()
-        elif index == 4:  # Tasks tab
+        if index == 3:  # Storage tab
+            self.storage_tab.on_tab_activated()
+        elif index == 4:  # Devices tab
+            self.device_manager_tab.on_tab_activated()
+        elif index == 5:  # Tasks tab
             self.tasks_tab.on_tab_activated()
-        elif index == 5:  # Enterprise tab
+        elif index == 6:  # Enterprise tab
             self.enterprise_tab.on_tab_activated()
 
         self._content_stack.setCurrentIndex(index)
@@ -226,7 +236,7 @@ class MainWindow(QMainWindow):
         """
         Pre-warm caches in background after window is shown.
 
-        Note: With lazy loading enabled for Drivers, Tasks, and Enterprise tabs,
+        Note: With lazy loading enabled for Storage, Devices, Tasks, and Enterprise tabs,
         we no longer prewarm those caches here. Data is loaded on first tab activation.
         """
         # Currently no prewarming needed - tabs use lazy loading
@@ -270,19 +280,24 @@ class MainWindow(QMainWindow):
         processes_action.triggered.connect(lambda: self._navigate_to(2))
         view_menu.addAction(processes_action)
 
-        drivers_action = QAction("&Drivers", self)
-        drivers_action.setShortcut("Ctrl+4")
-        drivers_action.triggered.connect(lambda: self._navigate_to(3))
-        view_menu.addAction(drivers_action)
+        storage_action = QAction("S&torage", self)
+        storage_action.setShortcut("Ctrl+4")
+        storage_action.triggered.connect(lambda: self._navigate_to(3))
+        view_menu.addAction(storage_action)
+
+        devices_action = QAction("&Devices", self)
+        devices_action.setShortcut("Ctrl+5")
+        devices_action.triggered.connect(lambda: self._navigate_to(4))
+        view_menu.addAction(devices_action)
 
         tasks_action = QAction("&Tasks", self)
-        tasks_action.setShortcut("Ctrl+5")
-        tasks_action.triggered.connect(lambda: self._navigate_to(4))
+        tasks_action.setShortcut("Ctrl+6")
+        tasks_action.triggered.connect(lambda: self._navigate_to(5))
         view_menu.addAction(tasks_action)
 
         enterprise_action = QAction("&Enterprise", self)
-        enterprise_action.setShortcut("Ctrl+6")
-        enterprise_action.triggered.connect(lambda: self._navigate_to(5))
+        enterprise_action.setShortcut("Ctrl+7")
+        enterprise_action.triggered.connect(lambda: self._navigate_to(6))
         view_menu.addAction(enterprise_action)
 
         view_menu.addSeparator()
@@ -340,7 +355,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Clean up resources when closing."""
-        # Stop overview tab workers
         if hasattr(self, 'overview_tab'):
             self.overview_tab.cleanup()
+        if hasattr(self, 'storage_tab'):
+            self.storage_tab.cleanup()
         event.accept()

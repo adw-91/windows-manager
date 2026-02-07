@@ -18,6 +18,7 @@
 | Phase 8: Performance Bottlenecks | **Completed** | [2026-02-04-phase8-performance-design.md](plans/2026-02-04-phase8-performance-design.md) |
 | Phase 9: Native Win32 APIs | **Completed** | [2026-02-05-phase9-native-win32-apis.md](plans/2026-02-05-phase9-native-win32-apis.md) |
 | Bug Fix Pass | **Completed** | - |
+| Phase 10: Feature Expansion | **Completed** | - |
 
 ---
 
@@ -42,16 +43,17 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - **Auto-refresh**: Tile values update every 1 second, graphs every 500ms
 
 ### System Tab
-- **Card-based UI**: Modern card layout with msinfo32-style information
-- **Categories**:
-  - System Summary: Computer name, OS, version, manufacturer, model, processor, RAM
-  - Hardware: CPU cores, speed, memory config, BIOS, baseboard
-  - Components: Display, VRAM, sound, storage, optical drives
-  - Software: User, processes, services, Windows dir, locale
-  - Security: Security Center, Defender, Firewall, UAC, Secure Boot, Windows Update
-  - Network: Active adapter, IPv4, speed, hostname, FQDN
+- **Tabbed Sub-sections**: QTabWidget with 7 lazy-loaded sub-tabs:
+  - Summary: Computer name, OS, version, manufacturer, model, processor, RAM, boot time, domain, timezone, processes, services, locale
+  - Hardware: Processor, CPU cores/speed, total RAM, memory config, manufacturer, product name, BIOS, baseboard
+  - Components: All display adapters (with VRAM and driver version), all sound devices, storage summary, optical drives
+  - Security: Security Center, Defender, Firewall, UAC, Secure Boot, Windows Update, Virtualization-Based Security + BitLocker per-volume status (protection, encryption status, method)
+  - TPM: Version, interface type, implementation revision (via TBS API without admin), enabled/activated/owned, spec/manufacturer version (via WMI with admin)
+  - Network: Active adapter, IPv4, subnet mask, link speed, MTU, hostname, FQDN, default gateway, DNS servers, adapter counts
+  - Boot & Firmware: Firmware type (UEFI/BIOS), Secure Boot, BIOS release date, system BIOS version, system family, BIOS version, system SKU, SMBIOS version, boot device
 
-- **FlowLayout**: Custom layout that reflows key-value pairs naturally on resize
+- **Per-sub-tab lazy loading**: Only collects data for the visible sub-tab
+- **PropertyList layout**: Two-column grid layout (key: value) for clean, readable data display
 
 ### Processes & Services Tab
 - **Processes Sub-tab**:
@@ -70,10 +72,21 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
   - Search/filter by name, display name, or status
   - Context menu for quick actions
 
-### Drivers Tab
-- **Device Driver Inventory**: WMI COM-based driver enumeration
+### Device Manager Tab
+- **Categorized Device Tree**: Tree grouped by device class (Display, Net, USB, etc.) with RAG problem indicators
+- **Native SetupAPI**: Uses SetupDiGetClassDevsW + CfgMgr32 for near-instant enumeration (~50ms vs 2-5s WMI)
+- **Detail Panel**: QGridLayout-based device info and driver details (loaded lazily from registry), hardware IDs
+- **Problem Codes**: CM_PROB_* code descriptions with RAG coloring on tree items
+- **Search/Filter**: Case-insensitive filter by device name, manufacturer, or device ID
+- **Context Menu**: Copy Device ID, Copy Name, Copy Hardware IDs
 - **Lazy Loading**: Data loaded on first tab activation
-- **Loading Overlay**: Shows loading state while data is fetched
+
+### Storage Tab
+- **Drive Overview Tiles**: Clickable tiles showing drive letter, label, filesystem, total/used/free with RAG progress bars
+- **Directory Size Tree**: On-demand recursive scanning with lazy tree expansion
+- **Cancellable Scans**: Background scanning via CancellableWorker with progress bar and cancel button
+- **Context Menu**: Open in Explorer, Copy Path
+- **Lazy Loading**: Drive info loaded on first tab activation, directory scans triggered by user interaction
 
 ### Enterprise Tab
 - **Current User**: Username, domain, full name, SID, admin status
@@ -93,8 +106,8 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - **Lazy Loading**: Data loaded on first tab activation
 
 ### Sidebar
-- **Navigation**: Tab switching via icon buttons (Overview, System, Processes, Drivers, Tasks, Enterprise)
-- **Keyboard Shortcuts**: Ctrl+1 through Ctrl+6 for quick tab switching
+- **Navigation**: Tab switching via icon buttons (Overview, System, Processes, Storage, Devices, Tasks, Enterprise)
+- **Keyboard Shortcuts**: Ctrl+1 through Ctrl+7 for quick tab switching
 
 ## Architecture
 
@@ -104,7 +117,8 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - `ProcessManager`: Native process enumeration via NtQuerySystemInformation with CPU time-delta tracking
 - `WindowsInfo`: System information via registry, ctypes, WMI COM
 - `ServiceInfo`: Windows service management via win32service SCM API
-- `DriverInfo`: Device driver enumeration via WMI COM
+- `DeviceInfo`: Device enumeration via native SetupAPI/CfgMgr32 with lazy driver detail lookups
+- `StorageInfo`: Drive overview (psutil + WMI) and on-demand directory size scanning
 - `SoftwareInfo`: Installed software from registry (HKLM/HKCU Uninstall, Wow6432Node)
 - `StartupInfo`: Startup apps from registry, startup folders, and Task Scheduler COM
 - `EnterpriseInfo`: Domain, Azure AD, Group Policy via win32net, registry, ctypes
@@ -115,20 +129,23 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - `MainWindow`: Main application window with sidebar navigation
 - Tab implementations:
   - `SystemOverviewTab`: Live metric tiles with expandable graphs and collapsible sections
-  - `SystemTab`: Card-based system information
+  - `SystemTab`: Tabbed sub-section system information with per-sub-tab lazy loading and PropertyList grid layout
   - `ProcessesServicesTab`: Process and service management
-  - `DriversTab`: Device driver inventory
+  - `StorageTab`: Drive overview tiles with drill-down directory tree
+  - `DeviceManagerTab`: Categorized device tree with detail panel
   - `EnterpriseTab`: Domain and Azure AD information
   - `TaskSchedulerTab`: Task Scheduler management
 
 ### Widgets
 - `ExpandableMetricTile`: Metric tile with click-to-expand live graph and detail labels
 - `CollapsibleSection`: Expandable/collapsible content section (accordion)
-- `FlowLayout`: Custom layout for natural key-value pair reflow
+- `PropertyList`: Two-column key-value grid layout for system information sub-tabs
+- `FlowLayout`: Custom layout for natural widget reflow (Overview tab, Enterprise tab)
 - `BatteryWidget`: Battery status display with health info
 - `LiveGraph` / `MultiLineGraph`: Real-time graph widgets using pyqtgraph with ring buffers
 - `LoadingOverlay`: Loading indicator overlay
 - `SoftwareTableWidget`: Sortable/searchable software table
+- `DriveTile`: Clickable drive overview tile with RAG progress bar
 
 ### Utilities
 - `formatters.py`: Data formatting (bytes, uptime, percentages)
@@ -140,6 +157,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
   - `security.py`: Token-based SID, admin check, username/domain
   - `gpo.py`: GPO enumeration via GetAppliedGPOListW
   - `process_info.py`: Native process enumeration via NtQuerySystemInformation
+  - `device_api.py`: Native device enumeration via SetupAPI/CfgMgr32
 
 ## Technology Stack
 - Python 3.13
@@ -148,7 +166,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - pywin32 (Windows service management, COM, security tokens)
 - pyqtgraph (Real-time graphs with numpy backend)
 - numpy (Efficient data storage via ring buffers)
-- ctypes (Windows API: locale, memory, firmware, GPO, key state, NtQuerySystemInformation)
+- ctypes (Windows API: locale, memory, firmware, GPO, key state, NtQuerySystemInformation, SetupAPI, TBS)
 - winreg (Registry access for system information)
 
 ## Key Implementation Details
@@ -175,6 +193,12 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - Wraps to new rows when horizontal space exhausted
 - Each key-value pair is a self-contained widget unit
 - Implements `heightForWidth()` for proper container sizing
+- Used in Overview tab (metric tile details) and Enterprise tab
+
+### TPM Detection
+- Primary: `Tbsi_GetDeviceInfo` from `tbs.dll` — works without admin, returns TPM version (1.2/2.0) and interface type
+- Fallback: WMI `Win32_Tpm` in `root\cimv2\Security\MicrosoftTpm` — provides enabled/activated/owned status, spec version, manufacturer version (requires admin)
+- Both sources merged: TBS provides basic detection, WMI adds detail when available
 
 ---
 
@@ -195,7 +219,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 ### Phase 8 Optimisations
 
 #### Lazy Tab Loading
-- Drivers, Tasks, and Enterprise tabs load data on first activation
+- Storage, Devices, Tasks, and Enterprise tabs load data on first activation
 - Tables show loading overlay until data arrives
 - **Impact:** Faster startup, no unnecessary subprocess calls
 
@@ -226,7 +250,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - New `src/utils/win32/` package: registry, WMI COM, ctypes, security, GPO helpers
 - Services: win32service SCM API instead of wmic/net commands
 - System info: Registry + ctypes instead of wmic/PowerShell
-- Drivers: WMI COM instead of PowerShell CSV parsing
+- Drivers → Devices: SetupAPI/CfgMgr32 ctypes instead of WMI COM
 - Task Scheduler: COM (Schedule.Service) instead of schtasks parsing
 - Enterprise: win32net + registry + ctypes instead of dsregcmd/gpresult
 - Battery: WMI COM + registry instead of PowerShell
