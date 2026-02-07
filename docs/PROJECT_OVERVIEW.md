@@ -43,17 +43,16 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - **Auto-refresh**: Tile values update every 1 second, graphs every 500ms
 
 ### System Tab
-- **Tabbed Sub-sections**: QTabWidget with 7 lazy-loaded sub-tabs:
+- **Tabbed Sub-sections**: QTabWidget with 5 lazy-loaded sub-tabs:
   - Summary: Computer name, OS, version, manufacturer, model, processor, RAM, boot time, domain, timezone, processes, services, locale
-  - Hardware: Processor, CPU cores/speed, total RAM, memory config, manufacturer, product name, BIOS, baseboard
+  - Hardware: Compound card containing Hardware (processor, CPU cores/speed, RAM, memory config, manufacturer, product name, BIOS, baseboard) + Boot & Firmware (firmware type, Secure Boot, BIOS dates/versions, system family/SKU, SMBIOS, boot device)
   - Components: All display adapters (with VRAM and driver version), all sound devices, storage summary, optical drives
-  - Security: Security Center, Defender, Firewall, UAC, Secure Boot, Windows Update, Virtualization-Based Security + BitLocker per-volume status (protection, encryption status, method)
-  - TPM: Version, interface type, implementation revision (via TBS API without admin), enabled/activated/owned, spec/manufacturer version (via WMI with admin)
+  - Security: Compound card containing Security Status (Security Center, Defender, Firewall, UAC, Secure Boot, Windows Update, VBS) + TPM (version, interface type via TBS API, enabled/activated/owned via WMI) + BitLocker (per-volume protection, encryption status, method)
   - Network: Active adapter, IPv4, subnet mask, link speed, MTU, hostname, FQDN, default gateway, DNS servers, adapter counts
-  - Boot & Firmware: Firmware type (UEFI/BIOS), Secure Boot, BIOS release date, system BIOS version, system family, BIOS version, system SKU, SMBIOS version, boot device
 
 - **Per-sub-tab lazy loading**: Only collects data for the visible sub-tab
-- **PropertyList layout**: Two-column grid layout (key: value) for clean, readable data display
+- **Compound cards**: Multi-section tabs (Hardware, Security) use a single bordered container with multiple titled sections inside — no hard divisions between sections
+- **SectionCard layout**: Two-column grid layout (key: value) with alternating row backgrounds
 
 ### Processes & Services Tab
 - **Processes Sub-tab**:
@@ -83,16 +82,21 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 
 ### Storage Tab
 - **Drive Overview Tiles**: Clickable tiles showing drive letter, label, filesystem, total/used/free with RAG progress bars
+- **Selected Drive State**: Clicked tile shows accent border to indicate active selection
+- **Loading Overlay**: Spinner overlay on tree during Phase 1 directory listing
+- **Two-Phase Scanning**: Phase 1 instant directory listing, Phase 2 progressive size calculation with progress bar
 - **Directory Size Tree**: On-demand recursive scanning with lazy tree expansion
 - **Cancellable Scans**: Background scanning via CancellableWorker with progress bar and cancel button
 - **Context Menu**: Open in Explorer, Copy Path
 - **Lazy Loading**: Drive info loaded on first tab activation, directory scans triggered by user interaction
 
 ### Enterprise Tab
-- **Current User**: Username, domain, full name, SID, admin status
-- **Entra ID**: Azure AD join status, tenant ID/name, device ID
-- **Domain**: Computer name, domain/workgroup, domain joined status, DC
-- **Group Policy**: GPO applied status, count, computer/user policies
+- **Compound Card Layout**: Single bordered container with four titled sections:
+  - Current User: Username, domain, full name, SID, admin status
+  - Entra ID: Azure AD join status, tenant ID/name, device ID
+  - Domain: Computer name, domain/workgroup, domain joined status, DC
+  - Group Policy: GPO applied status, count, computer/user policies
+- **Grid Layout**: Two-column key-value grid with alternating row backgrounds and RAG coloring for status fields
 - **Lazy Loading**: Data loaded on first tab activation
 
 ### Task Scheduler Tab
@@ -129,7 +133,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - `MainWindow`: Main application window with sidebar navigation
 - Tab implementations:
   - `SystemOverviewTab`: Live metric tiles with expandable graphs and collapsible sections
-  - `SystemTab`: Tabbed sub-section system information with per-sub-tab lazy loading and PropertyList grid layout
+  - `SystemTab`: Tabbed sub-section system information with per-sub-tab lazy loading, compound cards, and SectionCard grid layout
   - `ProcessesServicesTab`: Process and service management
   - `StorageTab`: Drive overview tiles with drill-down directory tree
   - `DeviceManagerTab`: Categorized device tree with detail panel
@@ -140,7 +144,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - `ExpandableMetricTile`: Metric tile with click-to-expand live graph and detail labels
 - `CollapsibleSection`: Expandable/collapsible content section (accordion)
 - `PropertyList`: Two-column key-value grid layout for system information sub-tabs
-- `FlowLayout`: Custom layout for natural widget reflow (Overview tab, Enterprise tab)
+- `FlowLayout`: Custom layout for natural widget reflow (Overview tab)
 - `BatteryWidget`: Battery status display with health info
 - `LiveGraph` / `MultiLineGraph`: Real-time graph widgets using pyqtgraph with ring buffers
 - `LoadingOverlay`: Loading indicator overlay
@@ -193,7 +197,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - Wraps to new rows when horizontal space exhausted
 - Each key-value pair is a self-contained widget unit
 - Implements `heightForWidth()` for proper container sizing
-- Used in Overview tab (metric tile details) and Enterprise tab
+- Used in Overview tab (metric tile details) and Storage tab (drive tiles)
 
 ### TPM Detection
 - Primary: `Tbsi_GetDeviceInfo` from `tbs.dll` — works without admin, returns TPM version (1.2/2.0) and interface type

@@ -9,9 +9,9 @@ Windows Manager provides a unified interface for managing Windows system resourc
 ## Features
 
 - **Overview** — Live metrics dashboard (CPU, memory, disk, network) with real-time graphs, installed software, startup apps, battery health
-- **System** — Comprehensive system information (msinfo32-style) with tabbed sub-sections: Summary, Hardware, Components, Security & BitLocker, TPM, Network, Boot & Firmware
+- **System** — Comprehensive system information (msinfo32-style) with tabbed sub-sections: Summary, Hardware + Boot & Firmware, Components, Security + TPM + BitLocker, Network
 - **Processes & Services** — Process monitoring with RAG coloring, service management (start/stop/restart)
-- **Storage** — Drive overview tiles with RAG usage bars, on-demand recursive directory size scanning with cancellation
+- **Storage** — Drive overview tiles with RAG usage bars and selection state, loading overlay, two-phase directory size scanning with cancellation
 - **Devices** — Native Device Manager with categorized device tree, driver details, and problem code indicators (~50ms enumeration via SetupAPI)
 - **Task Scheduler** — View, create, and manage scheduled tasks with schedule configuration
 - **Enterprise** — User info, Entra ID status, domain/workgroup, Group Policy

@@ -19,8 +19,9 @@
   - `LoopingWorker` - recurring tasks (metrics, process refresh)
   - `CancellableWorker` - long-running cancellable operations
 - **Layouts**:
-  - `PropertyList` (QGridLayout-based) for key-value data in System tab sub-tabs and Device Manager detail panel
-  - `FlowLayout` from `src/ui/widgets/flow_layout.py` for widgets that should reflow on resize (Overview, Enterprise)
+  - `SectionCard` / `EnterpriseCard` (QGridLayout-based) for key-value data with alternating row backgrounds
+  - Compound cards: `_create_compound_card()` wraps multiple borderless SectionCards in a single bordered container
+  - `FlowLayout` from `src/ui/widgets/flow_layout.py` for widgets that should reflow on resize (Overview tab, Storage drive tiles)
 
 ## Code Conventions
 
@@ -37,15 +38,15 @@
 
 ## UI Patterns
 
-- **PropertyList**: Two-column QGridLayout for key-value display (System tab, Device Manager detail panel)
-- **Card-based layouts**: Use `EnterpriseCard` for grouped information in Enterprise tab
-- **FlowLayout**: For widgets that should reflow naturally on resize (Overview tab, Enterprise tab)
+- **SectionCard / EnterpriseCard**: Two-column QGridLayout for key-value display with alternating row backgrounds
+- **Compound cards**: Multi-section tabs use `_create_compound_card()` (System) or styled QFrame (Enterprise) wrapping borderless cards in a single bordered container
+- **FlowLayout**: For widgets that should reflow naturally on resize (Overview tab, Storage drive tiles)
 - **RAG coloring**: Use `Colors.SUCCESS` (green), `Colors.WARNING` (amber), `Colors.ERROR` (red) for status
 - **Context menus**: Right-click menus for tables with common actions
-- **Loading overlays**: Use `LoadingOverlay` widget for async operations
+- **Loading overlays**: Use `LoadingOverlay` widget for async operations (tiles, tree panels)
 - **Tabbed sub-sections**: System tab uses QTabWidget with per-sub-tab lazy loading
 - **Tree + detail panel**: Device Manager and Task Scheduler use QSplitter with tree/detail layout
-- **Drive tiles**: Storage tab uses clickable DriveTile widgets with RAG progress bars
+- **Drive tiles**: Storage tab uses clickable DriveTile widgets with RAG progress bars and selected state (accent border)
 - **TPM detection**: TBS API (`tbs.dll`) for non-admin detection, WMI fallback for detail
 
 ## Testing

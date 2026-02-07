@@ -2,76 +2,28 @@
 
 from typing import Dict
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QScrollArea, QFrame, QSizePolicy
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout,
+    QPushButton, QScrollArea, QFrame, QSizePolicy,
 )
-from PySide6.QtCore import Qt, Slot, QThreadPool, QTimer
+from PySide6.QtCore import Qt, Slot, QThreadPool
 
 from src.ui.theme import Colors
 from src.services.enterprise_info import EnterpriseInfo
 from src.utils.thread_utils import SingleRunWorker
-from src.ui.widgets.flow_layout import FlowLayout
 
-
-class KeyValuePair(QWidget):
-    """A widget that displays a key-value pair as a single unit for flow layouts."""
-
-    # Keys that should show RAG coloring for Yes/No values
-    RAG_KEYS = {"Administrator", "Domain Joined", "Entra ID Joined", "GPOs Applied"}
-
-    def __init__(self, key: str, value: str, parent=None):
-        super().__init__(parent)
-        self._key = key
-        self._value = value
-        self._value_label = None
-        self._init_ui()
-
-    def _init_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 2, 16, 2)  # Right margin for spacing between pairs
-        layout.setSpacing(6)
-
-        # Key label
-        key_label = QLabel(f"{self._key}:")
-        key_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY.name()}; font-size: 11px;")
-        key_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        layout.addWidget(key_label)
-
-        # Value label with conditional RAG coloring
-        self._value_label = QLabel(str(self._value))
-        style = f"color: {Colors.TEXT_PRIMARY.name()}; font-size: 11px;"
-
-        # Apply RAG coloring for specific keys
-        if self._key in self.RAG_KEYS:
-            if self._value == "Yes":
-                style = f"color: {Colors.SUCCESS.name()}; font-size: 11px; font-weight: bold;"
-            elif self._value == "No":
-                style = f"color: {Colors.TEXT_SECONDARY.name()}; font-size: 11px;"
-
-        self._value_label.setStyleSheet(style)
-        self._value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(self._value_label)
-
-        # Set size policy so this widget doesn't stretch excessively
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-
-    def set_value(self, value: str):
-        """Update the value."""
-        self._value = value
-        if self._value_label:
-            self._value_label.setText(str(value))
+# Keys that should show RAG coloring for Yes/No values
+_RAG_KEYS = {"Administrator", "Domain Joined", "Entra ID Joined", "GPOs Applied"}
 
 
 class EnterpriseCard(QFrame):
-    """A modern card widget for displaying enterprise information with flow layout."""
+    """A card section displaying enterprise information as a key-value grid."""
 
     def __init__(self, title: str, icon: str = "", parent=None):
         super().__init__(parent)
         self._title = title
         self._icon = icon
-        self._kv_widgets: Dict[str, KeyValuePair] = {}
-        self._flow_layout = None
-        self._content_widget = None
+        self._grid: QGridLayout = None
+        self._row_count = 0
         self._init_ui()
 
     def _init_ui(self):
@@ -82,90 +34,115 @@ class EnterpriseCard(QFrame):
                 border: 1px solid {Colors.BORDER.name()};
                 border-radius: 8px;
             }}
-            EnterpriseCard:hover {{
-                border-color: {Colors.ACCENT.name()};
-            }}
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         # Header with icon and title
-        header = QHBoxLayout()
-        header.setSpacing(8)
-
-        if self._icon:
-            icon_label = QLabel(self._icon)
-            icon_label.setStyleSheet(f"font-size: 18px; color: {Colors.ACCENT.name()};")
-            header.addWidget(icon_label)
-
-        title_label = QLabel(self._title)
+        title_text = f"{self._icon}  {self._title}" if self._icon else self._title
+        title_label = QLabel(title_text)
         title_label.setStyleSheet(f"""
             font-size: 13px;
             font-weight: bold;
             color: {Colors.ACCENT.name()};
-            letter-spacing: 0.5px;
+            padding: 10px 12px 6px 12px;
+            background: transparent;
         """)
-        header.addWidget(title_label)
-        header.addStretch()
-
-        layout.addLayout(header)
+        layout.addWidget(title_label)
 
         # Separator line
         separator = QFrame()
         separator.setFixedHeight(1)
-        separator.setStyleSheet(f"background-color: {Colors.BORDER.name()};")
+        separator.setStyleSheet(
+            f"background-color: {Colors.BORDER.name()}; margin: 0 8px;"
+        )
         layout.addWidget(separator)
 
-        # Content widget with flow layout
-        self._content_widget = QWidget()
-        self._flow_layout = FlowLayout(self._content_widget, margin=0, h_spacing=8, v_spacing=6)
-        layout.addWidget(self._content_widget)
+        # Grid for key-value rows
+        self._grid = QGridLayout()
+        self._grid.setContentsMargins(4, 4, 4, 4)
+        self._grid.setHorizontalSpacing(0)
+        self._grid.setVerticalSpacing(0)
+        self._grid.setColumnMinimumWidth(0, 160)
+        layout.addLayout(self._grid)
+        layout.addStretch()
 
-    def set_data(self, data: Dict[str, str]):
-        """Set the card data using flow layout for natural reflow."""
-        # Clear existing widgets
-        while self._flow_layout.count():
-            item = self._flow_layout.takeAt(0)
+    def _clear_grid(self) -> None:
+        """Remove all widgets from the grid."""
+        while self._grid.count():
+            item = self._grid.takeAt(0)
             if item and item.widget():
                 item.widget().deleteLater()
-        self._kv_widgets.clear()
+        self._row_count = 0
 
-        # Create key-value pair widgets
-        items = [(k, v) for k, v in data.items() if k != "Error"]
+    def set_data(self, data: Dict[str, str]) -> None:
+        """Replace all rows with new data."""
+        self._clear_grid()
 
-        for key, value in items:
-            kv_widget = KeyValuePair(key, value)
-            self._kv_widgets[key] = kv_widget
-            self._flow_layout.addWidget(kv_widget)
+        for key, value in data.items():
+            if key == "Error":
+                continue
+            self._add_row(key, str(value))
 
-        # Force layout update
-        self._content_widget.updateGeometry()
+    def _add_row(self, key: str, value: str) -> None:
+        """Add a key-value row with alternating background and RAG coloring."""
+        row_bg = (
+            f"background-color: {Colors.WINDOW_ALT.name()};"
+            if self._row_count % 2 == 0
+            else "background: transparent;"
+        )
 
-    def set_loading(self):
+        key_label = QLabel(f"{key}:")
+        key_label.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY.name()}; font-size: 12px; "
+            f"padding: 6px 8px; {row_bg}"
+        )
+        key_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        key_label.setMinimumWidth(160)
+
+        # Value style with RAG coloring for specific keys
+        value_style = (
+            f"color: {Colors.TEXT_PRIMARY.name()}; font-size: 12px; "
+            f"font-weight: 500; padding: 6px 8px; {row_bg}"
+        )
+        if key in _RAG_KEYS:
+            if value == "Yes":
+                value_style = (
+                    f"color: {Colors.SUCCESS.name()}; font-size: 12px; "
+                    f"font-weight: bold; padding: 6px 8px; {row_bg}"
+                )
+            elif value == "No":
+                value_style = (
+                    f"color: {Colors.TEXT_SECONDARY.name()}; font-size: 12px; "
+                    f"padding: 6px 8px; {row_bg}"
+                )
+
+        value_label = QLabel(value)
+        value_label.setStyleSheet(value_style)
+        value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        value_label.setWordWrap(True)
+
+        self._grid.addWidget(key_label, self._row_count, 0)
+        self._grid.addWidget(value_label, self._row_count, 1)
+        self._row_count += 1
+
+    def set_loading(self) -> None:
         """Show loading state."""
-        while self._flow_layout.count():
-            item = self._flow_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-        self._kv_widgets.clear()
-
+        self._clear_grid()
         loading = QLabel("Loading...")
-        loading.setStyleSheet(f"color: {Colors.TEXT_SECONDARY.name()}; font-style: italic;")
-        self._flow_layout.addWidget(loading)
+        loading.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY.name()}; font-style: italic; padding: 6px 8px;"
+        )
+        self._grid.addWidget(loading, 0, 0, 1, 2)
 
-    def set_error(self, msg: str):
+    def set_error(self, msg: str) -> None:
         """Show error state."""
-        while self._flow_layout.count():
-            item = self._flow_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-        self._kv_widgets.clear()
-
+        self._clear_grid()
         error = QLabel(f"Error: {msg}")
-        error.setStyleSheet(f"color: {Colors.ERROR.name()};")
-        self._flow_layout.addWidget(error)
+        error.setStyleSheet(f"color: {Colors.ERROR.name()}; padding: 6px 8px;")
+        self._grid.addWidget(error, 0, 0, 1, 2)
 
 
 class EnterpriseTab(QWidget):
@@ -180,23 +157,6 @@ class EnterpriseTab(QWidget):
         self._data_loaded = False  # Track if data has been loaded
         self.init_ui()
         # Don't load data here - will be loaded on first tab activation (lazy loading)
-
-        self._resize_timer = QTimer(self)
-        self._resize_timer.setInterval(100)
-        self._resize_timer.setSingleShot(True)
-        self._resize_timer.timeout.connect(self._on_resize_done)
-
-    def resizeEvent(self, event) -> None:
-        """Suppress card repaints during resize drag, batch at end."""
-        if not self._resize_timer.isActive():
-            self._card_container.setUpdatesEnabled(False)
-        self._resize_timer.start()
-        super().resizeEvent(event)
-
-    def _on_resize_done(self) -> None:
-        """Re-enable updates after resize drag ends."""
-        self._card_container.setUpdatesEnabled(True)
-        self._card_container.update()
 
     def init_ui(self):
         """Initialize the user interface."""
@@ -258,15 +218,24 @@ class EnterpriseTab(QWidget):
         """)
         content_layout.addWidget(self._loading_label)
 
-        # Card container - single column layout
-        self._card_container = QWidget()
+        # Single compound card containing all sections
+        self._card_container = QFrame()
+        self._card_container.setObjectName("enterprise_card")
+        self._card_container.setStyleSheet(f"""
+            #enterprise_card {{
+                background-color: {Colors.WIDGET.name()};
+                border: 1px solid {Colors.BORDER.name()};
+                border-radius: 8px;
+            }}
+        """)
         self._card_layout = QVBoxLayout(self._card_container)
-        self._card_layout.setSpacing(12)
+        self._card_layout.setSpacing(0)
         self._card_layout.setContentsMargins(0, 0, 0, 0)
         self._card_container.setVisible(False)
 
+        borderless = "EnterpriseCard { background: transparent; border: none; border-radius: 0; }"
+
         # Create cards - order: Current User / Entra ID / Domain / Group Policy
-        # Removed Network, merged Domain+Computer into Domain
         card_configs = [
             ("Current User", "👤"),
             ("Entra ID", "☁️"),
@@ -276,8 +245,11 @@ class EnterpriseTab(QWidget):
 
         for name, icon in card_configs:
             card = EnterpriseCard(name, icon)
+            card.setStyleSheet(borderless)
             self._cards[name] = card
             self._card_layout.addWidget(card)
+
+        self._card_layout.addStretch()
 
         content_layout.addWidget(self._card_container)
         content_layout.addStretch()

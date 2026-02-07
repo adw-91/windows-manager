@@ -83,6 +83,7 @@ class SectionCard(QFrame):
         self._grid.setVerticalSpacing(0)
         self._grid.setColumnMinimumWidth(0, 160)
         layout.addLayout(self._grid)
+        layout.addStretch()
 
     def set_data(self, data: Dict[str, str]) -> None:
         """Replace all rows with new data."""
@@ -238,12 +239,6 @@ class SystemTab(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet("QScrollArea { background: transparent; }")
 
-        content_widget.setStyleSheet(
-            content_widget.styleSheet() + " QWidget { background: transparent; }"
-            if content_widget.styleSheet()
-            else "background: transparent;"
-        )
-
         scroll.setWidget(content_widget)
         scroll.setVisible(False)
         container_layout.addWidget(scroll)
@@ -262,8 +257,34 @@ class SystemTab(QWidget):
         lay.addWidget(self._summary_card)
         return self._create_subtab_container(TAB_SUMMARY, content)
 
+    def _create_compound_card(self, *cards: SectionCard) -> QFrame:
+        """Wrap multiple SectionCards in a single bordered container."""
+        borderless = "SectionCard { background: transparent; border: none; border-radius: 0; }"
+        for card in cards:
+            card.setStyleSheet(borderless)
+
+        container = QFrame()
+        container.setObjectName("compound_card")
+        container.setStyleSheet(f"""
+            #compound_card {{
+                background-color: {Colors.WIDGET.name()};
+                border: 1px solid {Colors.BORDER.name()};
+                border-radius: 8px;
+            }}
+        """)
+        container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        for card in cards:
+            layout.addWidget(card)
+        layout.addStretch()
+
+        return container
+
     def _create_hardware_tab(self) -> QWidget:
-        """Hardware (left) + Boot & Firmware (right) side by side."""
+        """Single card containing Hardware + Boot & Firmware sections."""
         self._hardware_card = SectionCard("Hardware")
         self._boot_firmware_card = SectionCard("Boot & Firmware")
 
@@ -272,12 +293,9 @@ class SystemTab(QWidget):
         lay = QVBoxLayout(content)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(16)
-
-        row = QHBoxLayout()
-        row.setSpacing(12)
-        row.addWidget(self._hardware_card)
-        row.addWidget(self._boot_firmware_card)
-        lay.addLayout(row)
+        lay.addWidget(self._create_compound_card(
+            self._hardware_card, self._boot_firmware_card,
+        ))
 
         return self._create_subtab_container(TAB_HARDWARE, content)
 
@@ -292,7 +310,7 @@ class SystemTab(QWidget):
         return self._create_subtab_container(TAB_COMPONENTS, content)
 
     def _create_security_tab(self) -> QWidget:
-        """Security (left) + TPM (right) on top, BitLocker full-width below."""
+        """Single card containing Security Status + TPM + BitLocker sections."""
         self._security_card = SectionCard("Security Status")
         self._tpm_card = SectionCard("TPM")
         self._bitlocker_card = SectionCard("BitLocker Encryption")
@@ -302,14 +320,9 @@ class SystemTab(QWidget):
         lay = QVBoxLayout(content)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(12)
-
-        top_row = QHBoxLayout()
-        top_row.setSpacing(12)
-        top_row.addWidget(self._security_card)
-        top_row.addWidget(self._tpm_card)
-        lay.addLayout(top_row)
-
-        lay.addWidget(self._bitlocker_card)
+        lay.addWidget(self._create_compound_card(
+            self._security_card, self._tpm_card, self._bitlocker_card,
+        ))
 
         return self._create_subtab_container(TAB_SECURITY, content)
 

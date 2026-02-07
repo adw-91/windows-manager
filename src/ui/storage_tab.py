@@ -46,27 +46,42 @@ def _format_size(size_bytes: int) -> str:
 class DriveTile(QFrame):
     """Clickable tile showing drive overview with progress bar."""
 
+    _STYLE_NORMAL = f"""
+        DriveTile {{
+            background-color: {Colors.WIDGET.name()};
+            border: 1px solid {Colors.BORDER.name()};
+            border-radius: 8px;
+        }}
+        DriveTile:hover {{
+            border-color: {Colors.ACCENT.name()};
+            background-color: {Colors.WIDGET_HOVER.name()};
+        }}
+    """
+    _STYLE_SELECTED = f"""
+        DriveTile {{
+            background-color: {Colors.WIDGET_HOVER.name()};
+            border: 2px solid {Colors.ACCENT.name()};
+            border-radius: 8px;
+        }}
+    """
+
     def __init__(self, drive: DriveInfo, parent=None):
         super().__init__(parent)
         self._drive = drive
+        self._selected = False
         self._init_ui()
+
+    def set_selected(self, selected: bool) -> None:
+        """Toggle accent border to indicate selection."""
+        self._selected = selected
+        self.setStyleSheet(self._STYLE_SELECTED if selected else self._STYLE_NORMAL)
 
     def _init_ui(self):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedWidth(260)
         self.setFixedHeight(110)
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet(f"""
-            DriveTile {{
-                background-color: {Colors.WIDGET.name()};
-                border: 1px solid {Colors.BORDER.name()};
-                border-radius: 8px;
-            }}
-            DriveTile:hover {{
-                border-color: {Colors.ACCENT.name()};
-                background-color: {Colors.WIDGET_HOVER.name()};
-            }}
-        """)
+        self.setStyleSheet(self._STYLE_NORMAL)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
@@ -178,9 +193,12 @@ class StorageTab(QWidget):
         self._storage_info = get_storage_info()
         self._drive_cache = DataCache(self._storage_info.get_drive_info, fallback_value=[])
         self._current_scan_worker: Optional[CancellableWorker] = None
+        self._listing_worker: Optional[SingleRunWorker] = None
+        self._subdir_workers: List[SingleRunWorker] = []
         self._data_loaded = False
         self._drives: List[DriveInfo] = []
         self._current_drive: Optional[DriveInfo] = None
+        self._selected_tile: Optional[DriveTile] = None
 
         # Two-phase scan state
         self._path_to_item: Dict[str, QTreeWidgetItem] = {}
@@ -236,14 +254,10 @@ class StorageTab(QWidget):
         tree_layout.setContentsMargins(0, 0, 0, 0)
         tree_layout.setSpacing(6)
 
-        # Tree header bar
-        tree_header = QHBoxLayout()
-        tree_header.setSpacing(8)
-
-        self._tree_path_label = QLabel("")
-        self._tree_path_label.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {Colors.TEXT_PRIMARY.name()};")
-        tree_header.addWidget(self._tree_path_label)
-        tree_header.addStretch()
+        # Compact progress/cancel bar
+        progress_bar = QHBoxLayout()
+        progress_bar.setSpacing(8)
+        progress_bar.addStretch()
 
         self._scan_progress = QProgressBar()
         self._scan_progress.setRange(0, 100)
@@ -251,7 +265,7 @@ class StorageTab(QWidget):
         self._scan_progress.setFixedHeight(16)
         self._scan_progress.setTextVisible(False)
         self._scan_progress.setVisible(False)
-        tree_header.addWidget(self._scan_progress)
+        progress_bar.addWidget(self._scan_progress)
 
         self._cancel_btn = QPushButton("Cancel")
         self._cancel_btn.setVisible(False)
@@ -267,9 +281,9 @@ class StorageTab(QWidget):
             }}
             QPushButton:hover {{ background: {Colors.WIDGET_HOVER.name()}; }}
         """)
-        tree_header.addWidget(self._cancel_btn)
+        progress_bar.addWidget(self._cancel_btn)
 
-        tree_layout.addLayout(tree_header)
+        tree_layout.addLayout(progress_bar)
 
         # Directory tree
         self._tree = QTreeWidget()
@@ -304,6 +318,9 @@ class StorageTab(QWidget):
             }}
         """)
         tree_layout.addWidget(self._tree)
+
+        # Loading overlay for tree (shown during Phase 1 listing)
+        self._tree_loading = LoadingOverlay(self._tree)
 
         layout.addWidget(self._tree_panel)
 
@@ -348,31 +365,44 @@ class StorageTab(QWidget):
         """Start two-phase scan of the selected drive's root directory."""
         self._current_drive = drive
         self._tree_panel.setVisible(True)
-        self._tree_path_label.setText(f"{drive.letter}\\ — Loading...")
         self._tree.clear()
         self._path_to_item.clear()
+
+        # Update selected tile visual state
+        if self._selected_tile:
+            self._selected_tile.set_selected(False)
+        # Find the DriveTile for this drive
+        for i in range(self._tiles_layout.count()):
+            item = self._tiles_layout.itemAt(i)
+            if item and isinstance(item.widget(), DriveTile) and item.widget()._drive is drive:
+                self._selected_tile = item.widget()
+                self._selected_tile.set_selected(True)
+                break
 
         # Cancel any existing scan
         self._cancel_all_workers()
 
+        # Show loading spinner on tree
+        self._tree_loading.show_loading("Scanning...")
+
         root_path = f"{drive.letter}\\"
 
-        # Phase 1: fast listing via SingleRunWorker
+        # Phase 1: fast listing via SingleRunWorker (stored to prevent GC)
         worker = SingleRunWorker(self._storage_info.list_directory, root_path)
         worker.signals.result.connect(
             lambda entries: self._on_listing_complete(root_path, entries)
         )
         worker.signals.error.connect(self._on_scan_error)
+        self._listing_worker = worker
         QThreadPool.globalInstance().start(worker)
 
     @Slot(object)
     def _on_listing_complete(self, root_path: str, entries: List[DirEntry]) -> None:
         """Phase 1 complete — populate tree with unsized dirs, then start Phase 2."""
+        self._listing_worker = None
+        self._tree_loading.hide_loading()
         self._tree.clear()
         self._path_to_item.clear()
-
-        if self._current_drive:
-            self._tree_path_label.setText(f"{self._current_drive.letter}\\")
 
         # Build tree items
         dir_paths: List[str] = []
@@ -412,9 +442,10 @@ class StorageTab(QWidget):
 
     def _on_scan_error(self, error_msg: str) -> None:
         """Handle error from Phase 1 listing."""
+        self._listing_worker = None
+        self._tree_loading.hide_loading()
         self._scan_progress.setVisible(False)
         self._cancel_btn.setVisible(False)
-        self._tree_path_label.setText(f"Error: {error_msg}")
 
     # ── Phase 2: Progressive size calculation ─────────────────────────
 
@@ -537,6 +568,7 @@ class StorageTab(QWidget):
         worker.signals.error.connect(
             lambda err, parent=item: self._on_subdir_scan_error(parent, err)
         )
+        self._subdir_workers.append(worker)
         QThreadPool.globalInstance().start(worker)
 
     @Slot(object)
@@ -669,20 +701,26 @@ class StorageTab(QWidget):
         self._cancel_all_workers()
         self._scan_progress.setVisible(False)
         self._cancel_btn.setVisible(False)
-        if self._current_drive:
-            self._tree_path_label.setText(f"{self._current_drive.letter}\\ — Cancelled")
 
     def _cancel_all_workers(self) -> None:
-        """Cancel all Phase 2 size workers and any root scan worker."""
+        """Cancel all workers — Phase 1 listing, Phase 2 size, subdirectory listing."""
         if self._current_scan_worker:
             self._current_scan_worker.cancel()
             self._current_scan_worker = None
+
+        # Phase 1 listing worker (SingleRunWorker — not cancellable, just release ref)
+        self._listing_worker = None
+
+        # Subdirectory listing workers
+        self._subdir_workers.clear()
 
         for worker in self._size_workers:
             worker.cancel()
         self._size_workers.clear()
         self._pending_sizes = 0
         self._completed_sizes = 0
+
+        self._tree_loading.hide_loading()
 
     # ── Context menu ──────────────────────────────────────────────────
 
@@ -725,6 +763,9 @@ class StorageTab(QWidget):
     @Slot()
     def _on_refresh(self) -> None:
         self._cancel_all_workers()
+        if self._selected_tile:
+            self._selected_tile.set_selected(False)
+            self._selected_tile = None
         self._tree_panel.setVisible(False)
         self._drive_cache.refresh()
 
