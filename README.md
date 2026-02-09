@@ -8,13 +8,47 @@ Windows Manager provides a unified interface for managing Windows system resourc
 
 ## Features
 
-- **Overview** — Live metrics dashboard (CPU, memory, disk, network) with real-time graphs, installed software, startup apps, battery health
-- **System** — Comprehensive system information (msinfo32-style) with tabbed sub-sections: Summary, Hardware + Boot & Firmware, Components, Security + TPM + BitLocker, Network
-- **Processes & Services** — Process monitoring with RAG coloring, service management (start/stop/restart)
-- **Storage** — Drive overview tiles with RAG usage bars and selection state, loading overlay, two-phase directory size scanning with cancellation
-- **Devices** — Native Device Manager with categorized device tree, driver details, and problem code indicators (~50ms enumeration via SetupAPI)
-- **Task Scheduler** — View, create, and manage scheduled tasks with schedule configuration
-- **Enterprise** — User info, Entra ID status, domain/workgroup, Group Policy
+### Overview
+
+Live metrics dashboard with real-time graphs for CPU, memory, disk, and network. Includes installed software with context menus, startup apps, and battery health.
+
+<img src="img/overview_1.png" width="500" alt="Dashboard with metric tiles and real-time graphs"> <img src="img/overview_2.png" width="500" alt="Installed software table with context menu"> <img src="img/overview_3.png" width="500" alt="Expanded disk activity graph">
+
+### System Information
+
+Comprehensive system information (msinfo32-style) with tabbed sub-sections: Summary, Hardware, Components, Security, TPM, Network, Boot & Firmware.
+
+<img src="img/system_1.png" width="500" alt="Components sub-tab"> <img src="img/system_2.png" width="500" alt="Security sub-tab with TPM and BitLocker status">
+
+### Processes & Services
+
+Process monitoring with sorting, RAG coloring, and service management (start/stop/restart).
+
+<img src="img/process_1.png" width="500" alt="Process list sorted by memory"> <img src="img/process_2.png" width="500" alt="Services tab">
+
+### Storage
+
+Drive overview tiles with RAG usage bars, two-phase directory size scanning with cancellation.
+
+<img src="img/storage_1.png" width="500" alt="Storage with drive tile and directory size tree">
+
+### Devices
+
+Native Device Manager with categorized device tree, driver details, and problem code indicators.
+
+<img src="img/devices_1.png" width="500" alt="Device Manager with tree and detail panel">
+
+### Task Scheduler
+
+View, create, and manage scheduled tasks with folder navigation, schedule configuration, and context menus.
+
+<img src="img/tasks_1.png" width="500" alt="Task Scheduler with folder tree, task list, and details">
+
+### Enterprise
+
+User info, Entra ID status, domain/workgroup, and Group Policy details.
+
+<img src="img/enterprise_1.png" width="500" alt="Enterprise information">
 
 See [PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md) for detailed feature documentation.
 
@@ -30,62 +64,41 @@ See [PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md) for detailed feature documen
 
 ## Getting Started
 
-### Prerequisites
+### Standalone Executable
 
-- Python 3.13+
-- Windows 10/11
-- Administrator privileges (for some system operations)
+No Python installation required. Run the pre-built executable:
+```
+dist\WinManager\WinManager.exe
+```
 
-### Installation
+Some features (BitLocker status, TPM details, service management) require administrator privileges.
 
-1. Create and activate virtual environment:
+### From Source
+
+Requires Python 3.13+ and Windows 10/11.
+
 ```bash
 python -m venv venv
 venv\Scripts\activate
-```
-
-2. Install dependencies:
-```bash
 pip install -r requirements.txt
+run.bat
 ```
 
-### Running the Application
+### Building the Executable
 
-Using the convenience scripts:
 ```bash
-run.bat          # Windows CMD
-./run.sh         # Git Bash
+pip install pyinstaller
+pyinstaller WinManager.spec
 ```
 
-Or directly with Python:
-```bash
-python -m src.main
-```
-
-Or from activated virtual environment:
-```bash
-venv\Scripts\python -m src.main
-```
+The output is written to `dist\WinManager\`.
 
 ### Keyboard Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
-| Ctrl+1 | Overview |
-| Ctrl+2 | System |
-| Ctrl+3 | Processes & Services |
-| Ctrl+4 | Storage |
-| Ctrl+5 | Devices |
-| Ctrl+6 | Tasks |
-| Ctrl+7 | Enterprise |
+| Ctrl+1–7 | Switch tabs (Overview, System, Processes, Storage, Devices, Tasks, Enterprise) |
 | F5 | Refresh current tab |
-
-### Development
-
-Run tests:
-```bash
-python -m pytest tests/ -v
-```
 
 ## License
 
