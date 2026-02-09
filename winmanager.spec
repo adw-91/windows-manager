@@ -32,6 +32,7 @@ a = Analysis(
         'win32api',
         'win32security',
         'win32process',
+        'win32timezone',
 
         # psutil backends
         'psutil',

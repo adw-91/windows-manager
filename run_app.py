@@ -3,6 +3,25 @@
 import sys
 import os
 
+if getattr(sys, 'frozen', False):
+    import tempfile
+
+    # Redirect win32com gen_py cache to a writable temp directory.
+    # In frozen builds the bundle is read-only, so gencache can't write there.
+    import win32com
+    _gen_py = os.path.join(tempfile.gettempdir(), 'winmanager_gen_py')
+    os.makedirs(_gen_py, exist_ok=True)
+    win32com.__gen_path__ = _gen_py
+
+    # Send logging output to a file so errors are visible when console=False.
+    import logging
+    _log_path = os.path.join(tempfile.gettempdir(), 'winmanager.log')
+    logging.basicConfig(
+        filename=_log_path,
+        level=logging.WARNING,
+        format='%(asctime)s %(name)s %(levelname)s: %(message)s',
+    )
+
 # Add src directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
