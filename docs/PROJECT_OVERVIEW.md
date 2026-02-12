@@ -19,6 +19,7 @@
 | Phase 9: Native Win32 APIs | **Completed** | [2026-02-05-phase9-native-win32-apis.md](plans/2026-02-05-phase9-native-win32-apis.md) |
 | Bug Fix Pass | **Completed** | - |
 | Phase 10: Feature Expansion | **Completed** | - |
+| Nuitka Migration | **Completed** | [2026-02-12-pyinstaller-to-nuitka.md](plans/2026-02-12-pyinstaller-to-nuitka.md) |
 
 ---
 
@@ -172,6 +173,7 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - numpy (Efficient data storage via ring buffers)
 - ctypes (Windows API: locale, memory, firmware, GPO, key state, NtQuerySystemInformation, SetupAPI, TBS)
 - winreg (Registry access for system information)
+- Nuitka (Python-to-C compilation, standalone executable build)
 
 ## Key Implementation Details
 
@@ -262,16 +264,16 @@ Windows Manager is a lean combined system manager for Microsoft Windows built wi
 - Thread/handle counts: Exact totals from kernel data instead of 20-process sampling/extrapolation
 - **Impact:** Eliminated process spawning overhead, faster data collection, no shell parsing fragility
 
-### Compilation Options
+### Build System: Nuitka
 
-For significantly improved startup time, consider compiling with Nuitka:
+The project compiles to a native Windows executable using [Nuitka](https://nuitka.net/), which compiles Python to C via MSVC. This replaces the previous PyInstaller-based build.
 
-```bash
-pip install nuitka
-nuitka --standalone --enable-plugin=pyside6 --windows-console-mode=disable run_app.py
-```
-
-**Expected improvement**: 2-4x faster startup, 10-20% faster runtime.
+- **Build command**: `python build.py` (see `build.py` for all flags)
+- **Compiler**: MSVC via Visual Studio Build Tools (C++ Desktop workload)
+- **Output**: `dist\WinManager\WinManager.exe` (~138MB folder, 205 files)
+- **Frozen detection**: `run_app.py` checks both `sys.frozen` (PyInstaller) and `__compiled__` (Nuitka)
+- **PySide6 plugin**: Auto-discovers Qt dependencies; QtOpenGL explicitly included for pyqtgraph
+- **Cache**: Subsequent builds use clcache for fast recompilation
 
 ### Realistic Expectations
 
