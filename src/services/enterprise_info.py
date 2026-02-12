@@ -163,12 +163,18 @@ class EnterpriseInfo:
                 if device_id:
                     result["device_id"] = device_id
 
-                # TenantName may be in a different location
+                # TenantName — try CDJ\AAD first, then TenantInfo fallback
                 tenant_name = read_string(
                     winreg.HKEY_LOCAL_MACHINE,
                     r"SOFTWARE\Microsoft\Windows\CurrentVersion\CDJ\AAD",
                     "TenantName",
                 )
+                if not tenant_name and tenant_id:
+                    tenant_name = read_string(
+                        winreg.HKEY_LOCAL_MACHINE,
+                        rf"SYSTEM\CurrentControlSet\Control\CloudDomainJoin\TenantInfo\{tenant_id}",
+                        "DisplayName",
+                    )
                 if tenant_name:
                     result["tenant_name"] = tenant_name
 
