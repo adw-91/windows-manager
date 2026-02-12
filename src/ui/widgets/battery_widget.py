@@ -426,7 +426,7 @@ class BatteryWidget(QWidget):
                 cycle = wmi_ns.query_single(
                     "SELECT CycleCount FROM BatteryCycleCount"
                 )
-                if cycle and cycle.get("CycleCount"):
+                if cycle and cycle.get("CycleCount") is not None:
                     result["cycle_count"] = str(cycle["CycleCount"])
 
                 # BatteryStatus for current voltage
