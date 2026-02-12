@@ -39,6 +39,8 @@ NUITKA_CMD = [
     "--include-module=psutil._pswindows",
     "--include-package=pyqtgraph",
     "--include-module=numpy",
+    "--include-module=PySide6.QtOpenGL",
+    "--include-module=PySide6.QtOpenGLWidgets",
 
     # --- Exclude unused Qt modules (size optimization) ---
     "--nofollow-import-to=PySide6.QtNetwork",
