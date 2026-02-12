@@ -86,6 +86,8 @@ run.bat
 
 ### Building the Executable
 
+Requires [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **C++ Desktop** workload (Nuitka compiles Python to C via MSVC).
+
 ```bash
 pip install nuitka zstandard ordered-set
 python build.py

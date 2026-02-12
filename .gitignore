@@ -8,7 +8,6 @@ venv/
 env/
 ENV/
 *.egg-info/
-dist/
 build/
 *.egg
 .pytest_cache/
@@ -17,13 +16,13 @@ htmlcov/
 
 # Build outputs
 out/
-*.exe
 *.msi
 
 # Nuitka build artifacts
 *.build/
 *.dist/
 *.onefile-build/
+dist/run_app.build/
 
 # Environment variables
 .env
