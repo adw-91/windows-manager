@@ -1,18 +1,35 @@
 """Enterprise Tab - Modern card-based domain, workgroup, AAD information."""
 
-from typing import Dict
+from typing import Callable, Dict, List, Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout,
-    QPushButton, QScrollArea, QFrame, QSizePolicy,
+    QPushButton, QScrollArea, QFrame, QSizePolicy, QDialog, QListWidget,
+    QListWidgetItem, QAbstractItemView,
 )
 from PySide6.QtCore import Qt, Slot, QThreadPool
+from PySide6.QtGui import QCursor
 
 from src.ui.theme import Colors
 from src.services.enterprise_info import EnterpriseInfo
 from src.utils.thread_utils import SingleRunWorker
 
 # Keys that should show RAG coloring for Yes/No values
-_RAG_KEYS = {"Administrator", "Domain Joined", "Entra ID Joined", "GPOs Applied"}
+_RAG_KEYS = {"Administrator", "Domain Joined", "Entra ID Joined", "GPOs Applied", "MDM Enrolled"}
+
+
+class ClickableLabel(QLabel):
+    """QLabel that acts as a clickable link, invoking a callback on click."""
+
+    def __init__(self, text: str, callback: Callable, parent=None):
+        super().__init__(text, parent)
+        self._callback = callback
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._callback()
+        else:
+            super().mousePressEvent(event)
 
 
 class EnterpriseCard(QFrame):
@@ -128,6 +145,34 @@ class EnterpriseCard(QFrame):
         self._grid.addWidget(value_label, self._row_count, 1)
         self._row_count += 1
 
+    def set_clickable_value(self, key: str, callback: Callable) -> None:
+        """Make an existing row's value label clickable (accent-colored, hand cursor).
+
+        Call after set_data(). Finds the row matching `key` and replaces
+        its value widget with a ClickableLabel.
+        """
+        for row in range(self._grid.rowCount()):
+            key_item = self._grid.itemAtPosition(row, 0)
+            if not key_item or not key_item.widget():
+                continue
+            if key_item.widget().text() == f"{key}:":
+                val_item = self._grid.itemAtPosition(row, 1)
+                if val_item and val_item.widget():
+                    old_label = val_item.widget()
+                    text = old_label.text()
+                    style = old_label.styleSheet()
+                    # Replace color with accent
+                    new_style = style.replace(
+                        f"color: {Colors.TEXT_PRIMARY.name()}",
+                        f"color: {Colors.ACCENT.name()}",
+                    )
+                    clickable = ClickableLabel(text, callback)
+                    clickable.setStyleSheet(new_style)
+                    clickable.setWordWrap(True)
+                    self._grid.addWidget(clickable, row, 1)
+                    old_label.deleteLater()
+                break
+
     def set_loading(self) -> None:
         """Show loading state."""
         self._clear_grid()
@@ -155,6 +200,9 @@ class EnterpriseTab(QWidget):
         self._cards: Dict[str, EnterpriseCard] = {}
         self._loading_label = None
         self._data_loaded = False  # Track if data has been loaded
+        # Raw GPO lists for expandable popup
+        self._computer_gpos: List[str] = []
+        self._user_gpos: List[str] = []
         self.init_ui()
         # Don't load data here - will be loaded on first tab activation (lazy loading)
 
@@ -276,6 +324,12 @@ class EnterpriseTab(QWidget):
     def _on_data_loaded(self, all_data: dict) -> None:
         """Handle loaded enterprise information."""
         try:
+            gp_data = all_data.get("Group Policy", {})
+
+            # Store raw GPO lists for popup dialogs
+            self._computer_gpos = gp_data.get("computer_policies", [])
+            self._user_gpos = gp_data.get("user_policies", [])
+
             # Map old section names to new card names and format data
             card_data_map = {
                 "Current User": self._format_current_user(all_data.get("Current User", {})),
@@ -284,12 +338,26 @@ class EnterpriseTab(QWidget):
                     all_data.get("Domain", {}),
                     all_data.get("Computer", {})
                 ),
-                "Group Policy": self._format_group_policy(all_data.get("Group Policy", {})),
+                "Group Policy": self._format_group_policy(gp_data),
             }
 
             for card_name, formatted_data in card_data_map.items():
                 if card_name in self._cards:
                     self._cards[card_name].set_data(formatted_data)
+
+            # Make GPO rows clickable when there are items to show
+            gp_card = self._cards.get("Group Policy")
+            if gp_card:
+                if self._computer_gpos:
+                    gp_card.set_clickable_value(
+                        "Computer GPOs",
+                        lambda: self._show_list_dialog("Computer GPOs", self._computer_gpos),
+                    )
+                if self._user_gpos:
+                    gp_card.set_clickable_value(
+                        "User GPOs",
+                        lambda: self._show_list_dialog("User GPOs", self._user_gpos),
+                    )
 
             self._loading_label.setVisible(False)
             self._card_container.setVisible(True)
@@ -355,6 +423,67 @@ class EnterpriseTab(QWidget):
             result["User GPOs"] = display
 
         return result
+
+    def _show_list_dialog(self, title: str, items: List[str]) -> None:
+        """Show a popup dialog listing items (GPOs, policies, etc.)."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setMinimumSize(450, 300)
+        dialog.setStyleSheet(f"""
+            QDialog {{
+                background-color: {Colors.WINDOW.name()};
+            }}
+        """)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        header = QLabel(f"{title} ({len(items)})")
+        header.setStyleSheet(
+            f"font-size: 14px; font-weight: bold; color: {Colors.ACCENT.name()};"
+        )
+        layout.addWidget(header)
+
+        list_widget = QListWidget()
+        list_widget.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        list_widget.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {Colors.WIDGET.name()};
+                border: 1px solid {Colors.BORDER.name()};
+                border-radius: 4px;
+                color: {Colors.TEXT_PRIMARY.name()};
+                font-size: 12px;
+            }}
+            QListWidget::item {{
+                padding: 6px 8px;
+                border-bottom: 1px solid {Colors.BORDER.name()};
+            }}
+        """)
+        for item in items:
+            list_widget.addItem(QListWidgetItem(item))
+        layout.addWidget(list_widget)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
+                padding: 6px 20px;
+                border: 1px solid {Colors.BORDER.name()};
+                border-radius: 4px;
+                background: {Colors.WIDGET.name()};
+                color: {Colors.TEXT_PRIMARY.name()};
+            }}
+            QPushButton:hover {{
+                background: {Colors.WIDGET_HOVER.name()};
+            }}
+        """)
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+
+        dialog.exec()
 
     def on_tab_activated(self) -> None:
         """Called when this tab becomes visible. Loads data on first activation."""
