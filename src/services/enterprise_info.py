@@ -230,6 +230,54 @@ class EnterpriseInfo:
 
         return "Unknown"
 
+    def get_intune_info(self) -> Dict[str, Any]:
+        """Check Intune/MDM enrollment and policy status via registry."""
+        result: Dict[str, Any] = {
+            "is_enrolled": False,
+            "provider": "Unknown",
+            "upn": "Unknown",
+            "enrollment_state": 0,
+            "policy_count": 0,
+            "policy_areas": [],
+        }
+
+        try:
+            # Find MDM enrollment under HKLM\SOFTWARE\Microsoft\Enrollments\*
+            enrollments_path = r"SOFTWARE\Microsoft\Enrollments"
+            enrollment_guids = enumerate_subkeys(winreg.HKEY_LOCAL_MACHINE, enrollments_path)
+
+            mdm_providers = ("MS DM Server",)
+            for guid in enrollment_guids:
+                full_path = f"{enrollments_path}\\{guid}"
+                provider_id = read_string(
+                    winreg.HKEY_LOCAL_MACHINE, full_path, "ProviderID",
+                )
+                if provider_id and provider_id in mdm_providers:
+                    result["is_enrolled"] = True
+                    result["provider"] = provider_id
+
+                    upn = read_string(winreg.HKEY_LOCAL_MACHINE, full_path, "UPN")
+                    if upn:
+                        result["upn"] = upn
+
+                    from src.utils.win32.registry import read_dword
+                    state = read_dword(winreg.HKEY_LOCAL_MACHINE, full_path, "EnrollmentState")
+                    if state is not None:
+                        result["enrollment_state"] = state
+                    break
+
+            # Policy areas from PolicyManager
+            policy_path = r"SOFTWARE\Microsoft\PolicyManager\current\device"
+            policy_areas = enumerate_subkeys(winreg.HKEY_LOCAL_MACHINE, policy_path)
+            if policy_areas:
+                result["policy_count"] = len(policy_areas)
+                result["policy_areas"] = sorted(policy_areas)
+
+        except Exception as e:
+            logger.debug("Failed to get Intune info: %s", e)
+
+        return result
+
     def get_all_enterprise_info(self) -> Dict[str, Any]:
         """Get all enterprise information as a comprehensive dictionary."""
         return {
@@ -239,6 +287,7 @@ class EnterpriseInfo:
             "Network": self.get_network_info(),
             "Azure AD": self.get_azure_ad_info(),
             "Group Policy": self.get_group_policy_info(),
+            "Intune": self.get_intune_info(),
         }
 
 

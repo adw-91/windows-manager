@@ -200,9 +200,10 @@ class EnterpriseTab(QWidget):
         self._cards: Dict[str, EnterpriseCard] = {}
         self._loading_label = None
         self._data_loaded = False  # Track if data has been loaded
-        # Raw GPO lists for expandable popup
+        # Raw lists for expandable popups
         self._computer_gpos: List[str] = []
         self._user_gpos: List[str] = []
+        self._intune_policy_areas: List[str] = []
         self.init_ui()
         # Don't load data here - will be loaded on first tab activation (lazy loading)
 
@@ -283,12 +284,13 @@ class EnterpriseTab(QWidget):
 
         borderless = "EnterpriseCard { background: transparent; border: none; border-radius: 0; }"
 
-        # Create cards - order: Current User / Entra ID / Domain / Group Policy
+        # Create cards - order: Current User / Entra ID / Domain / Group Policy / Intune
         card_configs = [
             ("Current User", "👤"),
             ("Entra ID", "☁️"),
             ("Domain", "🏛️"),
             ("Group Policy", "📜"),
+            ("Intune / MDM", "📱"),
         ]
 
         for name, icon in card_configs:
@@ -325,12 +327,14 @@ class EnterpriseTab(QWidget):
         """Handle loaded enterprise information."""
         try:
             gp_data = all_data.get("Group Policy", {})
+            intune_data = all_data.get("Intune", {})
 
-            # Store raw GPO lists for popup dialogs
+            # Store raw lists for popup dialogs
             self._computer_gpos = gp_data.get("computer_policies", [])
             self._user_gpos = gp_data.get("user_policies", [])
+            self._intune_policy_areas = intune_data.get("policy_areas", [])
 
-            # Map old section names to new card names and format data
+            # Map section names to card names and format data
             card_data_map = {
                 "Current User": self._format_current_user(all_data.get("Current User", {})),
                 "Entra ID": self._format_entra_id(all_data.get("Azure AD", {})),
@@ -339,6 +343,7 @@ class EnterpriseTab(QWidget):
                     all_data.get("Computer", {})
                 ),
                 "Group Policy": self._format_group_policy(gp_data),
+                "Intune / MDM": self._format_intune(intune_data),
             }
 
             for card_name, formatted_data in card_data_map.items():
@@ -358,6 +363,14 @@ class EnterpriseTab(QWidget):
                         "User GPOs",
                         lambda: self._show_list_dialog("User GPOs", self._user_gpos),
                     )
+
+            # Make Intune policy areas clickable
+            intune_card = self._cards.get("Intune / MDM")
+            if intune_card and self._intune_policy_areas:
+                intune_card.set_clickable_value(
+                    "Policy Areas",
+                    lambda: self._show_list_dialog("Intune Policy Areas", self._intune_policy_areas),
+                )
 
             self._loading_label.setVisible(False)
             self._card_container.setVisible(True)
@@ -421,6 +434,28 @@ class EnterpriseTab(QWidget):
             if len(user_policies) > 2:
                 display += f" (+{len(user_policies) - 2})"
             result["User GPOs"] = display
+
+        return result
+
+    def _format_intune(self, data: dict) -> dict:
+        """Format Intune/MDM enrollment data."""
+        is_enrolled = data.get("is_enrolled", False)
+        result = {
+            "MDM Enrolled": "Yes" if is_enrolled else "No",
+        }
+
+        if is_enrolled:
+            provider = data.get("provider", "Unknown")
+            if provider == "MS DM Server":
+                provider = "Microsoft Intune"
+            result["Provider"] = provider
+            result["Enrolled User"] = data.get("upn", "N/A")
+
+            policy_count = data.get("policy_count", 0)
+            if policy_count > 0:
+                result["Policy Areas"] = f"{policy_count} policies"
+            else:
+                result["Policy Areas"] = "None"
 
         return result
 
