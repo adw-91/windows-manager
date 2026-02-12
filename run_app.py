@@ -3,11 +3,14 @@
 import sys
 import os
 
-if getattr(sys, 'frozen', False):
+# Detect packaged executable: PyInstaller sets sys.frozen, Nuitka sets __compiled__
+_is_frozen = getattr(sys, 'frozen', False) or "__compiled__" in dir()
+
+if _is_frozen:
     import tempfile
 
     # Redirect win32com gen_py cache to a writable temp directory.
-    # In frozen builds the bundle is read-only, so gencache can't write there.
+    # In frozen/compiled builds the bundle is read-only, so gencache can't write there.
     import win32com
     _gen_py = os.path.join(tempfile.gettempdir(), 'winmanager_gen_py')
     os.makedirs(_gen_py, exist_ok=True)
