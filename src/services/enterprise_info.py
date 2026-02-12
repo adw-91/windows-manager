@@ -13,6 +13,7 @@ import win32net
 from src.utils.win32.security import get_current_user_sid, is_user_admin, get_current_username, get_current_domain
 from src.utils.win32.gpo import get_applied_gpos
 from src.utils.win32.registry import read_string, read_dword, enumerate_subkeys
+from src.utils.win32.cert import get_cert_subject_cn
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,10 @@ class EnterpriseInfo:
                         rf"SYSTEM\CurrentControlSet\Control\CloudDomainJoin\TenantInfo\{tenant_id}",
                         "DeviceId",
                     )
+                # Fallback: extract from device certificate Subject CN
+                # (the JoinInfo subkey name is the cert thumbprint)
+                if not device_id:
+                    device_id = get_cert_subject_cn(sk)
                 if device_id:
                     result["device_id"] = device_id
 
@@ -246,8 +251,11 @@ class EnterpriseInfo:
             enrollments_path = r"SOFTWARE\Microsoft\Enrollments"
             enrollment_guids = enumerate_subkeys(winreg.HKEY_LOCAL_MACHINE, enrollments_path)
 
-            mdm_providers = ("MS DM Server", "Microsoft Device Management")
+            # MS DM Server = primary Intune MDM channel (has real user UPN)
+            # Microsoft Device Management = device/MAM channel (may have service UPN)
+            mdm_providers = {"MS DM Server": 2, "Microsoft Device Management": 1}
             best_enrollment = None
+            best_score = 0
             for guid in enrollment_guids:
                 full_path = f"{enrollments_path}\\{guid}"
                 provider_id = read_string(
@@ -255,8 +263,9 @@ class EnterpriseInfo:
                 )
                 if provider_id and provider_id in mdm_providers:
                     upn = read_string(winreg.HKEY_LOCAL_MACHINE, full_path, "UPN")
-                    # Prefer enrollment with a UPN (active user enrollment)
-                    if best_enrollment is None or (upn and not best_enrollment.get("upn")):
+                    score = mdm_providers[provider_id]
+                    if score > best_score:
+                        best_score = score
                         best_enrollment = {
                             "provider": provider_id,
                             "upn": upn,

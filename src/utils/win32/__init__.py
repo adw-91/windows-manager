@@ -25,3 +25,4 @@ from src.utils.win32.security import (
 )
 from src.utils.win32.gpo import get_applied_gpos
 from src.utils.win32.process_info import enumerate_processes
+from src.utils.win32.cert import get_cert_subject_cn
