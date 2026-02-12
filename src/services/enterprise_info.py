@@ -160,6 +160,13 @@ class EnterpriseInfo:
                     result["tenant_id"] = tenant_id
 
                 device_id = read_string(winreg.HKEY_LOCAL_MACHINE, full_path, "DeviceId")
+                # Fallback: TenantInfo path may have the canonical device ID
+                if not device_id and tenant_id:
+                    device_id = read_string(
+                        winreg.HKEY_LOCAL_MACHINE,
+                        rf"SYSTEM\CurrentControlSet\Control\CloudDomainJoin\TenantInfo\{tenant_id}",
+                        "DeviceId",
+                    )
                 if device_id:
                     result["device_id"] = device_id
 
