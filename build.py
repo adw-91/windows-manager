@@ -12,15 +12,12 @@ NUITKA_CMD = [
     "--standalone",
     "--assume-yes-for-downloads",
 
-    # --- Compiler ---
-    "--zig",
-
     # --- Output ---
     "--output-dir=dist",
     "--output-filename=WinManager.exe",
 
     # --- Windows GUI ---
-    "--disable-console",
+    "--windows-console-mode=disable",
 
     # --- Plugins ---
     "--enable-plugin=pyside6",
