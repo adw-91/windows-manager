@@ -20,6 +20,11 @@ out/
 *.exe
 *.msi
 
+# Nuitka build artifacts
+*.build/
+*.dist/
+*.onefile-build/
+
 # Environment variables
 .env
 .env.local

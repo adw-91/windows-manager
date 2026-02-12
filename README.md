@@ -87,8 +87,8 @@ run.bat
 ### Building the Executable
 
 ```bash
-pip install pyinstaller
-pyinstaller WinManager.spec
+pip install nuitka zstandard ordered-set
+python build.py
 ```
 
 The output is written to `dist\WinManager\`.
