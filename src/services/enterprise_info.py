@@ -12,7 +12,7 @@ import win32net
 
 from src.utils.win32.security import get_current_user_sid, is_user_admin, get_current_username, get_current_domain
 from src.utils.win32.gpo import get_applied_gpos
-from src.utils.win32.registry import read_string, enumerate_subkeys
+from src.utils.win32.registry import read_string, read_dword, enumerate_subkeys
 
 logger = logging.getLogger(__name__)
 
@@ -246,25 +246,40 @@ class EnterpriseInfo:
             enrollments_path = r"SOFTWARE\Microsoft\Enrollments"
             enrollment_guids = enumerate_subkeys(winreg.HKEY_LOCAL_MACHINE, enrollments_path)
 
-            mdm_providers = ("MS DM Server",)
+            mdm_providers = ("MS DM Server", "Microsoft Device Management")
+            best_enrollment = None
             for guid in enrollment_guids:
                 full_path = f"{enrollments_path}\\{guid}"
                 provider_id = read_string(
                     winreg.HKEY_LOCAL_MACHINE, full_path, "ProviderID",
                 )
                 if provider_id and provider_id in mdm_providers:
-                    result["is_enrolled"] = True
-                    result["provider"] = provider_id
-
                     upn = read_string(winreg.HKEY_LOCAL_MACHINE, full_path, "UPN")
-                    if upn:
-                        result["upn"] = upn
+                    # Prefer enrollment with a UPN (active user enrollment)
+                    if best_enrollment is None or (upn and not best_enrollment.get("upn")):
+                        best_enrollment = {
+                            "provider": provider_id,
+                            "upn": upn,
+                            "path": full_path,
+                        }
 
-                    from src.utils.win32.registry import read_dword
-                    state = read_dword(winreg.HKEY_LOCAL_MACHINE, full_path, "EnrollmentState")
-                    if state is not None:
-                        result["enrollment_state"] = state
-                    break
+            if best_enrollment:
+                result["is_enrolled"] = True
+                result["provider"] = best_enrollment["provider"]
+
+                upn = best_enrollment.get("upn")
+                if upn:
+                    # Strip trailing @GUID suffix from enrollment UPN
+                    parts = upn.split("@")
+                    if len(parts) >= 3:
+                        upn = "@".join(parts[:2])
+                    result["upn"] = upn
+
+                state = read_dword(
+                    winreg.HKEY_LOCAL_MACHINE, best_enrollment["path"], "EnrollmentState",
+                )
+                if state is not None:
+                    result["enrollment_state"] = state
 
             # Policy areas from PolicyManager
             policy_path = r"SOFTWARE\Microsoft\PolicyManager\current\device"

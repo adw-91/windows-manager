@@ -446,7 +446,7 @@ class EnterpriseTab(QWidget):
 
         if is_enrolled:
             provider = data.get("provider", "Unknown")
-            if provider == "MS DM Server":
+            if provider in ("MS DM Server", "Microsoft Device Management"):
                 provider = "Microsoft Intune"
             result["Provider"] = provider
             result["Enrolled User"] = data.get("upn", "N/A")
