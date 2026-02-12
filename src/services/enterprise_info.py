@@ -206,12 +206,29 @@ class EnterpriseInfo:
         }
 
     def _get_domain_controller(self) -> str:
-        """Get the primary domain controller name via NetGetDCName."""
+        """Get the primary domain controller name via NetGetDCName.
+
+        Falls back to cached DC from Group Policy History registry when
+        the live DC is unreachable (e.g. off-network / VPN disconnected).
+        """
+        # Try live DC first
         try:
             dc_name = win32net.NetGetDCName(None, None)
-            return dc_name.lstrip("\\") if dc_name else "Unknown"
+            if dc_name:
+                return dc_name.lstrip("\\")
         except Exception:
-            return "Unknown"
+            pass
+
+        # Fallback: cached DC from Group Policy History
+        cached_dc = read_string(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Group Policy\History",
+            "DCName",
+        )
+        if cached_dc:
+            return f"{cached_dc.lstrip(chr(92))} (offline)"
+
+        return "Unknown"
 
     def get_all_enterprise_info(self) -> Dict[str, Any]:
         """Get all enterprise information as a comprehensive dictionary."""
