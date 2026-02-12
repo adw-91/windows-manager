@@ -670,7 +670,7 @@ class SystemTab(QWidget):
     # -- Helpers --
 
     def _get_bitlocker_info(self) -> Dict[str, str]:
-        """Query BitLocker status per volume via WMI."""
+        """Query BitLocker status via WMI, with registry fallback for non-admin."""
         PROTECTION_STATUS = {0: "Off", 1: "On", 2: "Unknown"}
         CONVERSION_STATUS = {
             0: "Fully Decrypted", 1: "Fully Encrypted", 2: "Encryption In Progress",
@@ -705,7 +705,57 @@ class SystemTab(QWidget):
                     info[f"{letter} Method"] = ENCRYPTION_METHOD.get(method, str(method))
 
         except Exception:
+            # WMI requires admin — fall back to registry for partial info
+            info = self._get_bitlocker_registry_fallback()
+        return info
+
+    def _get_bitlocker_registry_fallback(self) -> Dict[str, str]:
+        """Read BitLocker policy/status from registry when WMI is access-denied."""
+        info = {}
+
+        # Basic encryption state
+        boot_status = read_dword(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\BitlockerStatus",
+            "BootStatus",
+        )
+        if boot_status is not None:
+            info["Boot Status"] = "Encrypted" if boot_status else "Not encrypted"
+
+        # Encryption method policy (from Intune / GPO)
+        POLICY_METHODS = {
+            3: "AES-CBC 128-bit", 4: "AES-CBC 256-bit",
+            6: "XTS-AES 128-bit", 7: "XTS-AES 256-bit",
+        }
+        enc_method = read_dword(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Policies\Microsoft\FVE",
+            "EncryptionMethodWithXtsOs",
+        )
+        if enc_method is not None:
+            info["OS Drive Policy"] = POLICY_METHODS.get(enc_method, str(enc_method))
+
+        enc_method_fixed = read_dword(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Policies\Microsoft\FVE",
+            "EncryptionMethodWithXtsFdv",
+        )
+        if enc_method_fixed is not None:
+            info["Fixed Drive Policy"] = POLICY_METHODS.get(enc_method_fixed, str(enc_method_fixed))
+
+        # Check if BitLocker policy is configured via Intune/MDM
+        policy_keys = enumerate_subkeys(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\PolicyManager\current\device\BitLocker",
+        )
+        if policy_keys:
+            info["MDM Policy"] = "Configured"
+
+        if not info:
             info["Status"] = "BitLocker not available"
+        else:
+            info["Note"] = "Run as administrator for full details"
+
         return info
 
     def _get_tpm_info(self) -> Dict[str, str]:
